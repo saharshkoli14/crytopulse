@@ -41,10 +41,11 @@ def insert_ticks(conn, symbol: str, candle_rows):
     event_time = candle timestamp (UTC)
     """
     sql = """
-    insert into public.ticks (symbol, event_time, price, volume)
-    values (%s, %s, %s, %s)
-    on conflict do nothing;
+    INSERT INTO public.ticks (event_time, symbol, price, volume, source)
+    VALUES %s
+    ON CONFLICT ON CONSTRAINT uq_ticks_dedupe DO NOTHING;
     """
+
     with conn.cursor() as cur:
         for c in candle_rows:
             # c = [time, low, high, open, close, volume]
