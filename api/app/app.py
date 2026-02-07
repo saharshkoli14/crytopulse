@@ -1,17 +1,14 @@
 import os
 from datetime import datetime, timedelta, timezone
-from typing import Optional
-
+from flask import Flask, jsonify, request
 import psycopg2
 from dotenv import load_dotenv
-from fastapi import FastAPI, Query
 
 load_dotenv()
 
 DB_URL = os.environ["DATABASE_URL"]
 
-app = FastAPI(title="CryptoPulse API", version="0.1.0")
-
+app = Flask(__name__)
 
 def fetch_all(query: str, params: tuple = ()):
     with psycopg2.connect(DB_URL) as conn:
@@ -21,16 +18,14 @@ def fetch_all(query: str, params: tuple = ()):
             cols = [d[0] for d in cur.description]
     return [dict(zip(cols, r)) for r in rows]
 
-
-@app.get("/health")
+@app.route("/health", methods=["GET"])
 def health():
-    return {"status": "ok"}
+    return jsonify({"status":"ok"})
 
-
-@app.get("/prices/latest")
-def latest_prices(symbols: str = Query("BTCUSD,ETHUSD,SOLUSD")):
+@app.route("/prices/latest", methods=["GET"])
+def latest_prices():
+    symbols = request.args.get("symbols", "BTCUSD,ETHUSD,SOLUSD")
     sym_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
-    # distinct-on returns latest row per symbol
     q = """
     select distinct on (symbol)
       symbol, event_time, price, volume, source
@@ -38,14 +33,12 @@ def latest_prices(symbols: str = Query("BTCUSD,ETHUSD,SOLUSD")):
     where symbol = any(%s)
     order by symbol, event_time desc;
     """
-    return {"data": fetch_all(q, (sym_list,))}
+    return jsonify({"data": fetch_all(q, (sym_list,))})
 
-
-@app.get("/prices/history")
-def price_history(
-    symbol: str = Query("BTCUSD"),
-    minutes: int = Query(60, ge=1, le=24 * 60),
-):
+@app.route("/prices/history", methods=["GET"])
+def price_history():
+    symbol = request.args.get("symbol", "BTCUSD").upper()
+    minutes = int(request.args.get("minutes", 60))
     since = datetime.now(timezone.utc) - timedelta(minutes=minutes)
     q = """
     select symbol, event_time, price, volume, source
@@ -53,14 +46,12 @@ def price_history(
     where symbol = %s and event_time >= %s
     order by event_time asc;
     """
-    return {"data": fetch_all(q, (symbol.upper(), since))}
+    return jsonify({"data": fetch_all(q, (symbol, since))})
 
-
-@app.get("/ohlcv/1m")
-def ohlcv_1m(
-    symbol: str = Query("BTCUSD"),
-    minutes: int = Query(120, ge=1, le=7 * 24 * 60),
-):
+@app.route("/ohlcv/1m", methods=["GET"])
+def ohlcv_1m():
+    symbol = request.args.get("symbol", "BTCUSD").upper()
+    minutes = int(request.args.get("minutes", 120))
     since = datetime.now(timezone.utc) - timedelta(minutes=minutes)
     q = """
     select symbol, bucket as time, open, high, low, close, volume
@@ -68,5 +59,7 @@ def ohlcv_1m(
     where symbol = %s and bucket >= %s
     order by bucket asc;
     """
-    return {"data": fetch_all(q, (symbol.upper(), since))}
+    return jsonify({"data": fetch_all(q, (symbol, since))})
 
+if __name__ == "__main__":
+    app.run(host="127.0.0.1", port=8000, debug=True)
