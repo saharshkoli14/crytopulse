@@ -1,158 +1,148 @@
 import os
 import time
 from datetime import datetime, timedelta, timezone
+from typing import List, Tuple, Dict, Any
 
 import requests
-import psycopg2
 from dotenv import load_dotenv
 
-# Coinbase Exchange (Advanced Trade / Exchange candles endpoint)
-BASE = "https://api.exchange.coinbase.com"
+# Uses psycopg2 because it's the most common on Windows for this setup.
+import psycopg2
+from psycopg2.extras import execute_batch
 
-# Products we backfill (Coinbase product_id -> our symbol)
-PRODUCTS = [
-    ("BTC-USD", "BTCUSD"),
-    ("ETH-USD", "ETHUSD"),
-    ("SOL-USD", "SOLUSD"),
-]
 
-# ---- Helpers ----
+BASE_URL = "https://api.exchange.coinbase.com"
+
+
+# Map your internal symbols -> Coinbase product IDs
+PRODUCTS: Dict[str, str] = {
+    "BTCUSD": "BTC-USD",
+    "ETHUSD": "ETH-USD",
+    "SOLUSD": "SOL-USD",
+}
+
+# Coinbase candles granularity allowed values (seconds)
+ALLOWED_GRANULARITIES = {60, 300, 900, 3600, 21600, 86400}
+
+# Coinbase returns max 300 candles per request
+MAX_CANDLES_PER_REQUEST = 300
+
+
 def iso_z(dt: datetime) -> str:
     """
-    Coinbase candles endpoint is picky: use UTC, seconds precision only (no microseconds),
-    and a Z suffix.
+    Coinbase expects RFC3339 timestamps; keep it clean:
+    - timezone aware UTC
+    - no microseconds
+    - Z suffix
     """
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
     dt = dt.astimezone(timezone.utc).replace(microsecond=0)
-    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    return dt.isoformat().replace("+00:00", "Z")
 
 
-def fetch_candles(product_id: str, start_dt: datetime, end_dt: datetime, granularity: int = 60):
+def fetch_candles(product_id: str, start: datetime, end: datetime, granularity: int) -> List[List[Any]]:
     """
-    Fetch candles from Coinbase Exchange:
-    Returns list of [time, low, high, open, close, volume]
+    Returns list of candles: [ time, low, high, open, close, volume ]
     """
-    # Coinbase can 400 if end <= start
-    if end_dt <= start_dt:
-        end_dt = start_dt + timedelta(seconds=granularity)
-
-    url = f"{BASE}/products/{product_id}/candles"
+    url = f"{BASE_URL}/products/{product_id}/candles"
     params = {
-        "start": iso_z(start_dt),
-        "end": iso_z(end_dt),
+        "start": iso_z(start),
+        "end": iso_z(end),
         "granularity": granularity,
     }
-    headers = {"Accept": "application/json", "User-Agent": "cryptopulse/1.0"}
+    r = requests.get(url, params=params, timeout=20)
+    r.raise_for_status()
+    data = r.json()
 
-    r = requests.get(url, params=params, headers=headers, timeout=20)
-
-    # Debug on failure
-    if r.status_code != 200:
-        print("DEBUG product:", product_id)
-        print("DEBUG params:", params)
-        print("Coinbase error:", r.status_code, r.text)
-        r.raise_for_status()
-
-    return r.json()
+    # Coinbase returns newest-first; reverse to insert chronologically
+    data.sort(key=lambda x: x[0])
+    return data
 
 
-def upsert_ticks(conn, symbol: str, candles):
+def insert_ticks(conn, rows: List[Tuple[str, datetime, float, float, str]]) -> int:
     """
-    Insert candles into public.ticks.
-
-    Assumes public.ticks has:
-      symbol TEXT
-      event_time TIMESTAMPTZ
-      price NUMERIC/DOUBLE
-      volume NUMERIC/DOUBLE NULLABLE
-      source TEXT
-    and a UNIQUE constraint like (symbol, event_time, source) or similar.
-
-    We'll insert "close" as price, and candle volume.
+    rows: (symbol, event_time, price, volume, source)
     """
-    if not candles:
+    if not rows:
         return 0
 
-    inserted = 0
+    sql = """
+    INSERT INTO public.ticks (symbol, event_time, price, volume, source)
+    VALUES (%s, %s, %s, %s, %s)
+    ON CONFLICT DO NOTHING;
+    """
     with conn.cursor() as cur:
-        for row in candles:
-            # Coinbase format: [time, low, high, open, close, volume]
-            ts_epoch, low, high, opn, close, vol = row
-
-            event_time = datetime.fromtimestamp(ts_epoch, tz=timezone.utc).replace(microsecond=0)
-            price = float(close) if close is not None else None
-            volume = float(vol) if vol is not None else None
-
-            cur.execute(
-                """
-                insert into public.ticks (symbol, event_time, price, volume, source)
-                values (%s, %s, %s, %s, %s)
-                on conflict do nothing;
-                """,
-                (symbol, event_time, price, volume, "coinbase"),
-            )
-            # rowcount is 1 when inserted, 0 when conflict
-            inserted += cur.rowcount
-
+        execute_batch(cur, sql, rows, page_size=500)
     conn.commit()
-    return inserted
+    return len(rows)
 
 
-def backfill_product(conn, product_id: str, symbol: str, days: int = 1, granularity: int = 60):
-    """
-    Backfill last N days in small windows.
-    Coinbase returns max ~300 candles per call commonly; use 5 hours per request for 1m candles.
-    5 hours = 300 minutes => 300 candles
-    """
-    now = datetime.now(timezone.utc).replace(microsecond=0)
-    start = now - timedelta(days=days)
+def backfill_product(conn, symbol: str, product_id: str, days: int, granularity: int = 60) -> None:
+    if granularity not in ALLOWED_GRANULARITIES:
+        raise ValueError(f"Invalid granularity={granularity}. Allowed: {sorted(ALLOWED_GRANULARITIES)}")
 
-    window = timedelta(hours=5)  # 5 hours => ~300 candles at 1-minute granularity
-    t = start
+    # Define time range (UTC), aligned to the minute
+    end = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+    start = end - timedelta(days=days)
+
+    # Max window Coinbase allows per request
+    max_window_seconds = granularity * MAX_CANDLES_PER_REQUEST
+    source = "coinbase"
 
     total_inserted = 0
-    while t < now:
-        t2 = min(t + window, now)
+    t = start
 
-        candles = fetch_candles(product_id, t, t2, granularity=granularity)
+    print(f"▶ Backfilling {symbol} ({product_id}) for last {days} day(s), granularity={granularity}s")
 
-        # Coinbase returns newest-first; sort ascending by time
-        candles_sorted = sorted(candles, key=lambda x: x[0]) if candles else []
+    while t < end:
+        t2 = min(t + timedelta(seconds=max_window_seconds), end)
 
-        ins = upsert_ticks(conn, symbol, candles_sorted)
-        total_inserted += ins
+        try:
+            candles = fetch_candles(product_id, t, t2, granularity)
+        except requests.HTTPError as e:
+            # Print useful debugging info and stop
+            print(f"❌ Coinbase request failed for {symbol}: {e}")
+            print(f"   start={iso_z(t)} end={iso_z(t2)} granularity={granularity}")
+            raise
 
-        print(f"✅ {symbol} {product_id} {iso_z(t)} -> {iso_z(t2)} | fetched={len(candles_sorted)} inserted={ins}")
+        rows = []
+        for c in candles:
+            # [ time, low, high, open, close, volume ]
+            ts = int(c[0])
+            close_price = float(c[4])
+            vol = float(c[5])
+
+            event_time = datetime.fromtimestamp(ts, tz=timezone.utc)
+            rows.append((symbol, event_time, close_price, vol, source))
+
+        inserted = insert_ticks(conn, rows)
+        total_inserted += inserted
+
+        print(f"  ✅ {symbol}: {iso_z(t)} → {iso_z(t2)} | candles={len(candles)} inserted={inserted}")
 
         # Move forward
         t = t2
 
-        # polite rate limiting
-        time.sleep(0.25)
+        # Be polite to API
+        time.sleep(0.15)
 
-    return total_inserted
+    print(f"✅ Done {symbol}. Total inserted (attempted): {total_inserted}\n")
 
 
-def main():
+def main() -> None:
     load_dotenv()
 
-    db_url = os.getenv("DATABASE_URL")
+    db_url = os.environ.get("DATABASE_URL")
     if not db_url:
-        raise RuntimeError("DATABASE_URL not found. Put it in ingest/.env")
+        raise RuntimeError("DATABASE_URL is missing. Put it in ingest/.env")
 
-    days = int(os.getenv("BACKFILL_DAYS", "1"))
-    granularity = int(os.getenv("GRANULARITY", "60"))  # 60 seconds (1m)
+    days = int(os.environ.get("BACKFILL_DAYS", "1"))
+    granularity = int(os.environ.get("GRANULARITY", "60"))
 
-    print(f"Starting Coinbase backfill: days={days}, granularity={granularity}s")
-
-    conn = psycopg2.connect(db_url)
-    try:
-        grand_total = 0
-        for product_id, symbol in PRODUCTS:
-            grand_total += backfill_product(conn, product_id, symbol, days=days, granularity=granularity)
-
-        print(f"\n🎉 Done. Total inserted: {grand_total}")
-    finally:
-        conn.close()
+    with psycopg2.connect(db_url) as conn:
+        for symbol, product_id in PRODUCTS.items():
+            backfill_product(conn, symbol, product_id, days=days, granularity=granularity)
 
 
 if __name__ == "__main__":
