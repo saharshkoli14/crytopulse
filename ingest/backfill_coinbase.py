@@ -65,7 +65,7 @@ def insert_ticks(conn, rows):
     sql = """
     INSERT INTO public.ticks (event_time, symbol, price, volume, source)
     VALUES %s
-    ON CONFLICT ON CONSTRAINT uq_ticks_dedupe DO NOTHING;
+    ON CONFLICT (symbol, event_time, price) DO NOTHING;
     """
 
     with conn.cursor() as cur:
