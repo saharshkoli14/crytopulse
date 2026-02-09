@@ -119,7 +119,8 @@ def backfill_product(
 # ---------------- MAIN ---------------- #
 
 def main():
-    symbol = os.getenv("SYMBOL", "BTCUSD")
+    for symbol in symbols:
+    backfill_product(conn, symbol.strip(), ...)
     granularity = int(os.getenv("GRANULARITY", "60"))
     days = int(os.getenv("BACKFILL_DAYS", "1"))
 
