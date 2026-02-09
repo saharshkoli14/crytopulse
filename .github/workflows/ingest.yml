@@ -42,7 +42,6 @@ jobs:
           ls -la
           ls -la ingest || true
 
-      - name: Run backfill / ingest
-        run: python ingest/backfill_coinbase.py
+      
 
 
