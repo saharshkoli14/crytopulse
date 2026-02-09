@@ -38,5 +38,7 @@ jobs:
           if [ -f requirements.txt ]; then pip install -r requirements.txt; else pip install psycopg2-binary requests python-dateutil; fi
 
       - name: Run backfill / ingest
+        working-directory: ingest
         run: |
           python backfill_coinbase.py
+
