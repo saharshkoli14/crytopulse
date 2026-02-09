@@ -24,11 +24,7 @@ DB_CONFIG = {
 def iso_z(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-def chunk_range(
-    start: datetime,
-    end: datetime,
-    granularity: int,
-) -> List[Tuple[datetime, datetime]]:
+def chunk_range(start: datetime, end: datetime, granularity: int) -> List[Tuple[datetime, datetime]]:
     max_window = timedelta(seconds=granularity * MAX_CANDLES_PER_REQUEST)
     chunks = []
     t = start
@@ -38,27 +34,33 @@ def chunk_range(
         t = t2
     return chunks
 
+def symbol_to_product_id(symbol: str) -> str:
+    """
+    Convert symbols like BTCUSD -> BTC-USD, ETHUSD -> ETH-USD, SOLUSD -> SOL-USD
+    """
+    s = symbol.strip().upper()
+    if not s.endswith("USD") or len(s) < 6:
+        raise ValueError(f"Unsupported symbol format: {symbol}. Expected like BTCUSD/ETHUSD.")
+    base = s[:-3]
+    quote = s[-3:]
+    return f"{base}-{quote}"
+
 # ---------------- COINBASE ---------------- #
 
-def fetch_candles(
-    product_id: str,
-    start: datetime,
-    end: datetime,
-    granularity: int,
-):
+def fetch_candles(product_id: str, start: datetime, end: datetime, granularity: int):
     url = f"{COINBASE_BASE}/products/{product_id}/candles"
-    params = {
-        "start": iso_z(start),
-        "end": iso_z(end),
-        "granularity": granularity,
-    }
+    params = {"start": iso_z(start), "end": iso_z(end), "granularity": granularity}
     r = requests.get(url, params=params, timeout=30)
     r.raise_for_status()
     return r.json()
 
 # ---------------- DATABASE ---------------- #
 
-def insert_ticks(conn, rows):
+def insert_ticks(conn, rows) -> int:
+    """
+    rows: List[(ts_utc, symbol, price_close, volume)]
+    Dedup via ON CONFLICT. This assumes you have a UNIQUE index compatible with (symbol,event_time,price)
+    """
     if not rows:
         return 0
 
@@ -80,14 +82,7 @@ def insert_ticks(conn, rows):
 
 # ---------------- BACKFILL ---------------- #
 
-def backfill_product(
-    conn,
-    symbol: str,
-    product_id: str,
-    start: datetime,
-    end: datetime,
-    granularity: int,
-):
+def backfill_product(conn, symbol: str, product_id: str, start: datetime, end: datetime, granularity: int):
     print(f"Backfilling {symbol} ({product_id}) @ {granularity}s")
     chunks = chunk_range(start, end, granularity)
     print(f"Total chunks: {len(chunks)} (max {MAX_CANDLES_PER_REQUEST} candles per chunk)")
@@ -99,8 +94,9 @@ def backfill_product(
 
         rows = []
         for c in candles:
+            # Coinbase candle format: [time, low, high, open, close, volume]
             ts = datetime.fromtimestamp(c[0], tz=timezone.utc)
-            price = float(c[4])      # close
+            price = float(c[4])   # close
             volume = float(c[5])
             rows.append((ts, symbol, price, volume))
 
@@ -109,22 +105,27 @@ def backfill_product(
 
         print(
             f"Chunk {i}/{len(chunks)} {iso_z(t1)} → {iso_z(t2)} | "
-            f"candles={len(rows)} | inserted={inserted}"
+            f"candles={len(rows)} | attempted_insert={inserted}"
         )
 
         time.sleep(0.35)  # Coinbase rate safety
 
-    print(f"Done {symbol}: total_inserted={total_inserted}")
+    print(f"Done {symbol}: total_attempted_insert={total_inserted}")
 
 # ---------------- MAIN ---------------- #
 
 def main():
-    for symbol in symbols:
-    backfill_product(conn, symbol.strip(), ...)
+    # Read symbols:
+    # Prefer SYMBOLS="BTCUSD,ETHUSD,SOLUSD"
+    # Fallback to SYMBOL="BTCUSD"
+    symbols_env = os.getenv("SYMBOLS")
+    if symbols_env and symbols_env.strip():
+        symbols = [s.strip().upper() for s in symbols_env.split(",") if s.strip()]
+    else:
+        symbols = [os.getenv("SYMBOL", "BTCUSD").strip().upper()]
+
     granularity = int(os.getenv("GRANULARITY", "60"))
     days = int(os.getenv("BACKFILL_DAYS", "1"))
-
-    product_id = f"{symbol[:-3]}-{symbol[-3:]}"  # BTCUSD -> BTC-USD
 
     now = datetime.now(timezone.utc)
 
@@ -138,14 +139,14 @@ def main():
         end = now
         start = now - timedelta(days=days)
 
-    print(
-        f"Backfilling {symbol} ({product_id}) for "
-        f"{(end - start).days} day(s) @ {granularity}s candles"
-    )
+    print(f"Window: {iso_z(start)} → {iso_z(end)} | granularity={granularity}s | symbols={symbols}")
 
     conn = psycopg2.connect(**DB_CONFIG)
     try:
-        backfill_product(conn, symbol, product_id, start, end, granularity)
+        for symbol in symbols:
+            product_id = symbol_to_product_id(symbol)
+            print(f"\n=== {symbol} ({product_id}) ===")
+            backfill_product(conn, symbol, product_id, start, end, granularity)
     finally:
         conn.close()
 
