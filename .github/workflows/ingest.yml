@@ -43,7 +43,12 @@ jobs:
           ls -la ingest || true
       - name: Run backfill / ingest
         run: |
-          python ingest/backfill_coinbase.py
+          IFS=',' read -ra SYMBOL_LIST <<< "$SYMBOLS"
+          for SYMBOL in "${SYMBOL_LIST[@]}"; do
+            echo "▶ Ingesting $SYMBOL"
+            export SYMBOL
+            python ingest/backfill_coinbase.py
+          done
 
       
 
