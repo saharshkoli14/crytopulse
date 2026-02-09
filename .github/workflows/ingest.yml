@@ -19,7 +19,7 @@ jobs:
       PGPASSWORD: ${{ secrets.PGPASSWORD }}
 
       # Ingest config
-      SYMBOL: "BTCUSD"
+      SYMBOL: "BTCUSD,ETHUSD,SOLUSD"
       GRANULARITY: "60"
       BACKFILL_DAYS: "1"
 
