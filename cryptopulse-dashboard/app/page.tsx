@@ -29,7 +29,6 @@ function fmtPct(x: number | null | undefined) {
 
 export default async function HomePage() {
   const res = await fetch("http://localhost:3000/api/overview", {
-    // for local dev; later we’ll change to relative URL for deployment
     cache: "no-store",
   });
 
@@ -44,26 +43,63 @@ export default async function HomePage() {
 
   const data: OverviewResponse = await res.json();
 
+  // ✅ REMOVE BTCUSDT (handles case/whitespace)
+  const symbols = (data.symbols ?? []).filter(
+    (r) => String(r.symbol).trim().toUpperCase() !== "BTCUSDT"
+  );
+
   return (
-    <main style={{ padding: 24, fontFamily: "system-ui", maxWidth: 1100, margin: "0 auto" }}>
-      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+    <main
+      style={{
+        padding: 24,
+        fontFamily: "system-ui",
+        maxWidth: 1100,
+        margin: "0 auto",
+      }}
+    >
+      <header
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "baseline",
+        }}
+      >
         <div>
           <h1 style={{ fontSize: 28, margin: 0 }}>CryptoPulse</h1>
           <p style={{ marginTop: 6, opacity: 0.8 }}>
-            Overview of tracked crypto pairs • Updated: {new Date(data.updated_at).toLocaleString()}
+            Overview of tracked crypto pairs • Updated:{" "}
+            {new Date(data.updated_at).toLocaleString()}
           </p>
         </div>
 
         <nav style={{ display: "flex", gap: 12 }}>
-          <Link href="/" style={{ textDecoration: "underline" }}>Overview</Link>
+          <Link href="/" style={{ textDecoration: "underline" }}>
+            Overview
+          </Link>
         </nav>
       </header>
 
       {/* Cards */}
-      <section style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 12, marginTop: 20 }}>
-        {data.symbols.map((r) => (
-          <div key={r.symbol} style={{ border: "1px solid #333", borderRadius: 12, padding: 14 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+      <section
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+          gap: 12,
+          marginTop: 20,
+        }}
+      >
+        {symbols.map((r) => (
+          <div
+            key={r.symbol}
+            style={{ border: "1px solid #333", borderRadius: 12, padding: 14 }}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "baseline",
+              }}
+            >
               <h2 style={{ margin: 0, fontSize: 18 }}>{r.symbol}</h2>
               <span style={{ opacity: 0.75, fontSize: 12 }}>
                 {new Date(r.latest_bucket).toLocaleString()}
@@ -74,7 +110,15 @@ export default async function HomePage() {
               {fmtNum(r.latest_close)}
             </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 10, fontSize: 13 }}>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr",
+                gap: 8,
+                marginTop: 10,
+                fontSize: 13,
+              }}
+            >
               <div>
                 <div style={{ opacity: 0.7 }}>24h change</div>
                 <div>{fmtPct(r.pct_change_24h)}</div>
@@ -120,16 +164,25 @@ export default async function HomePage() {
               </tr>
             </thead>
             <tbody>
-              {data.symbols.map((r) => (
+              {symbols.map((r) => (
                 <tr key={r.symbol}>
                   <td style={{ padding: 10, borderBottom: "1px solid #222" }}>
-                    <Link href={`/symbol/${encodeURIComponent(r.symbol)}`} style={{ textDecoration: "underline" }}>
+                    <Link
+                      href={`/symbol/${encodeURIComponent(r.symbol)}`}
+                      style={{ textDecoration: "underline" }}
+                    >
                       {r.symbol}
                     </Link>
                   </td>
-                  <td style={{ padding: 10, borderBottom: "1px solid #222" }}>{fmtNum(r.latest_close)}</td>
-                  <td style={{ padding: 10, borderBottom: "1px solid #222" }}>{fmtPct(r.pct_change_24h)}</td>
-                  <td style={{ padding: 10, borderBottom: "1px solid #222" }}>{fmtNum(r.volume_24h)}</td>
+                  <td style={{ padding: 10, borderBottom: "1px solid #222" }}>
+                    {fmtNum(r.latest_close)}
+                  </td>
+                  <td style={{ padding: 10, borderBottom: "1px solid #222" }}>
+                    {fmtPct(r.pct_change_24h)}
+                  </td>
+                  <td style={{ padding: 10, borderBottom: "1px solid #222" }}>
+                    {fmtNum(r.volume_24h)}
+                  </td>
                   <td style={{ padding: 10, borderBottom: "1px solid #222" }}>
                     {new Date(r.latest_bucket).toLocaleString()}
                   </td>
