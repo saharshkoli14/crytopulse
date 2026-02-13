@@ -10,13 +10,15 @@ const pool = new Pool({
 });
 
 export async function GET() {
-  let client;
+  let client: any;
   try {
     client = await pool.connect();
 
+    // ✅ remove BTCUSDT at the source
     const result = await client.query(`
       SELECT symbol, MAX(bucket) AS latest_bucket
       FROM crypto_1m
+      WHERE symbol <> 'BTCUSDT'
       GROUP BY symbol
     `);
 
@@ -26,7 +28,7 @@ export async function GET() {
       const symbol = row.symbol;
       const latest_bucket = row.latest_bucket;
 
-      // Latest candle (make sure it's exactly 1 row)
+      // latest candle (1 row)
       const latest = await client.query(
         `
         SELECT close, volume
@@ -38,6 +40,7 @@ export async function GET() {
         [symbol, latest_bucket]
       );
 
+      // close ~24h ago
       const prev = await client.query(
         `
         SELECT close
@@ -50,6 +53,7 @@ export async function GET() {
         [symbol, latest_bucket]
       );
 
+      // 24h stats
       const stats = await client.query(
         `
         SELECT
@@ -62,29 +66,32 @@ export async function GET() {
         [symbol, latest_bucket]
       );
 
-      // pg can return numerics as strings → safely parse
-      const latestClose = latest.rows[0]?.close ?? null;
-      const close24hAgo = prev.rows[0]?.close ?? null;
+      // pg may return numerics as strings -> convert safely
+      const latestCloseRaw = latest.rows[0]?.close ?? null;
+      const close24hAgoRaw = prev.rows[0]?.close ?? null;
 
-      const latestCloseNum = latestClose == null ? null : Number(latestClose);
-      const close24hAgoNum = close24hAgo == null ? null : Number(close24hAgo);
+      const latestClose = latestCloseRaw == null ? null : Number(latestCloseRaw);
+      const close24hAgo = close24hAgoRaw == null ? null : Number(close24hAgoRaw);
 
-      const volume24h = stats.rows[0]?.volume_24h ?? null;
-      const priceStd24h = stats.rows[0]?.price_std_24h ?? null;
+      const volume24hRaw = stats.rows[0]?.volume_24h ?? null;
+      const priceStd24hRaw = stats.rows[0]?.price_std_24h ?? null;
 
-      let pctChange24h = null;
-      if (latestCloseNum != null && close24hAgoNum != null && close24hAgoNum !== 0) {
-        pctChange24h = (latestCloseNum - close24hAgoNum) / close24hAgoNum;
+      const volume24h = volume24hRaw == null ? null : Number(volume24hRaw);
+      const priceStd24h = priceStd24hRaw == null ? null : Number(priceStd24hRaw);
+
+      let pctChange24h: number | null = null;
+      if (latestClose != null && close24hAgo != null && close24hAgo !== 0) {
+        pctChange24h = (latestClose - close24hAgo) / close24hAgo;
       }
 
       symbols.push({
         symbol,
         latest_bucket,
-        latest_close: latestCloseNum,
-        close_24h_ago: close24hAgoNum,
+        latest_close: latestClose,
+        close_24h_ago: close24hAgo,
         pct_change_24h: pctChange24h,
-        volume_24h: volume24h == null ? null : Number(volume24h),
-        price_std_24h: priceStd24h == null ? null : Number(priceStd24h),
+        volume_24h: volume24h,
+        price_std_24h: priceStd24h,
       });
     }
 
@@ -94,8 +101,11 @@ export async function GET() {
     });
   } catch (error) {
     console.error("Overview API error:", error);
-    return NextResponse.json({ error: "Failed to load overview data" }, { status: 500 });
+    return NextResponse.json(
+      { error: "Failed to load overview data" },
+      { status: 500 }
+    );
   } finally {
-    client?.release();
+    if (client) client.release();
   }
 }
