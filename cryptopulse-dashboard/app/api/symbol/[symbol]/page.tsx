@@ -1,9 +1,10 @@
-export default function SymbolPage({ params }: { params: { symbol: string } }) {
+type Props = { params: { symbol: string } };
+
+export default function SymbolPage({ params }: Props) {
   return (
-    <main style={{ padding: 24, fontFamily: "system-ui" }}>
-      <h1>Symbol: {params.symbol}</h1>
-      <p>Next step: show charts + indicators + prediction here.</p>
-      <a href="/" style={{ textDecoration: "underline" }}>← Back to overview</a>
+    <main style={{ padding: 24 }}>
+      <h1>{params.symbol}</h1>
+      <p>Next step: show charts, indicators, and prediction here.</p>
     </main>
   );
 }
