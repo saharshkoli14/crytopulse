@@ -73,7 +73,8 @@ export default async function HomePage() {
         </div>
 
         <nav style={{ display: "flex", gap: 12 }}>
-          <Link href="/" style={{ textDecoration: "underline" }}>
+          {/* ✅ this must be /overview (not /) */}
+          <Link href="/overview" style={{ textDecoration: "underline" }}>
             Overview
           </Link>
         </nav>
