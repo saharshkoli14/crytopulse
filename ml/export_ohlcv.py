@@ -1,6 +1,15 @@
+from pathlib import Path
+from dotenv import load_dotenv
+import os
+
+# Load Next.js env file so the ML scripts always work
+ENV_PATH = Path(__file__).resolve().parents[1] / "cryptopulse-dashboard" / ".env.local"
+load_dotenv(ENV_PATH, override=False)
+
 import os
 import pandas as pd
 import psycopg2
+
 
 # Usage:
 #   set DATABASE_URL env var (same as your Next app)
@@ -10,7 +19,7 @@ import psycopg2
 #   ml/data/BTCUSD_ohlcv_1m.parquet
 
 def export_symbol(symbol: str, out_path: str, lookback_days: int = 14):
-    db_url = os.environ.get("DATABASE_URL")
+    db_url = os.getenv("DATABASE_URL")
     if not db_url:
         raise RuntimeError("DATABASE_URL env var not set")
 
