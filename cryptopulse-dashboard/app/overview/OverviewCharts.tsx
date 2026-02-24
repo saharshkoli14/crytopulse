@@ -28,6 +28,22 @@ function fmtNum(x: number | null | undefined) {
   return Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(x);
 }
 
+// Dark-theme chart styles (so axes/grid/tooltip are visible on your new background)
+const AXIS_STROKE = "rgba(255,255,255,0.55)";
+const TICK_FILL = "rgba(255,255,255,0.75)";
+const GRID_STROKE = "rgba(255,255,255,0.10)";
+
+const tooltipContentStyle: React.CSSProperties = {
+  background: "rgba(0,0,0,0.75)",
+  border: "1px solid rgba(255,255,255,0.15)",
+  borderRadius: 12,
+  color: "rgba(255,255,255,0.92)",
+};
+
+const tooltipLabelStyle: React.CSSProperties = {
+  color: "rgba(255,255,255,0.85)",
+};
+
 export default function OverviewCharts({ series }: { series: Point[] }) {
   const data = (series ?? []).map((p) => ({
     ...p,
@@ -36,37 +52,85 @@ export default function OverviewCharts({ series }: { series: Point[] }) {
 
   return (
     <section style={{ marginTop: 18, display: "grid", gap: 14 }}>
-      <div style={{ border: "1px solid #333", borderRadius: 12, padding: 14 }}>
-        <h3 style={{ marginTop: 0 }}>Market Index (base=100)</h3>
+      {/* Market Index */}
+      <div
+        className="glass"
+        style={{
+          padding: 14,
+        }}
+      >
+        <h3 style={{ marginTop: 0, marginBottom: 10 }}>Market Index (base=100)</h3>
+
         <div style={{ height: 280 }}>
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={data}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="t" minTickGap={30} />
-              <YAxis tickFormatter={(v) => String(Math.round(v))} />
+              <CartesianGrid stroke={GRID_STROKE} strokeDasharray="3 3" />
+
+              <XAxis
+                dataKey="t"
+                minTickGap={30}
+                stroke={AXIS_STROKE}
+                tick={{ fill: TICK_FILL, fontSize: 12 }}
+                tickLine={{ stroke: AXIS_STROKE }}
+                axisLine={{ stroke: AXIS_STROKE }}
+              />
+
+              <YAxis
+                tickFormatter={(v) => String(Math.round(v))}
+                stroke={AXIS_STROKE}
+                tick={{ fill: TICK_FILL, fontSize: 12 }}
+                tickLine={{ stroke: AXIS_STROKE }}
+                axisLine={{ stroke: AXIS_STROKE }}
+              />
+
               <Tooltip
                 formatter={(v: any) => fmtNum(typeof v === "number" ? v : Number(v))}
                 labelFormatter={(label) => `Time: ${label}`}
+                contentStyle={tooltipContentStyle}
+                labelStyle={tooltipLabelStyle}
               />
-              <Line type="monotone" dataKey="market_index" dot={false} />
+
+              {/* Let the theme decide the line color; keep it visible with a thicker stroke */}
+              <Line type="monotone" dataKey="market_index" dot={false} strokeWidth={2} />
             </LineChart>
           </ResponsiveContainer>
         </div>
       </div>
 
-      <div style={{ border: "1px solid #333", borderRadius: 12, padding: 14 }}>
-        <h3 style={{ marginTop: 0 }}>Total Volume (per minute)</h3>
+      {/* Total Volume */}
+      <div className="glass" style={{ padding: 14 }}>
+        <h3 style={{ marginTop: 0, marginBottom: 10 }}>Total Volume (per minute)</h3>
+
         <div style={{ height: 280 }}>
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={data}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="t" minTickGap={30} />
-              <YAxis />
+              <CartesianGrid stroke={GRID_STROKE} strokeDasharray="3 3" />
+
+              <XAxis
+                dataKey="t"
+                minTickGap={30}
+                stroke={AXIS_STROKE}
+                tick={{ fill: TICK_FILL, fontSize: 12 }}
+                tickLine={{ stroke: AXIS_STROKE }}
+                axisLine={{ stroke: AXIS_STROKE }}
+              />
+
+              <YAxis
+                stroke={AXIS_STROKE}
+                tick={{ fill: TICK_FILL, fontSize: 12 }}
+                tickLine={{ stroke: AXIS_STROKE }}
+                axisLine={{ stroke: AXIS_STROKE }}
+              />
+
               <Tooltip
                 formatter={(v: any) => fmtNum(typeof v === "number" ? v : Number(v))}
                 labelFormatter={(label) => `Time: ${label}`}
+                contentStyle={tooltipContentStyle}
+                labelStyle={tooltipLabelStyle}
               />
-              <Bar dataKey="total_volume" />
+
+              {/* Bar with a visible fill on dark background */}
+              <Bar dataKey="total_volume" fill="rgba(99,102,241,0.65)" />
             </BarChart>
           </ResponsiveContainer>
         </div>

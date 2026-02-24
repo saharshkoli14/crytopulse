@@ -1,8 +1,41 @@
-import sys
+import json
+import argparse
 from pathlib import Path
 import pandas as pd
 import numpy as np
 import joblib
+
+
+parser = argparse.ArgumentParser()
+parser.add_argument("symbol", type=str)
+parser.add_argument("horizon_minutes", type=int)
+parser.add_argument(
+    "--mode",
+    type=str,
+    default="D",
+    choices=["A", "D"],
+    help="A=direction (UP/DOWN), D=strong UP move signal",
+)
+parser.add_argument(
+    "--thr",
+    type=float,
+    default=0.0035,
+    help="Threshold for mode D as decimal return. Example: 0.0035 = 0.35%%",
+)
+parser.add_argument(
+    "--asof_rows",
+    type=int,
+    default=250,
+    help="How many latest rows to load to compute features safely",
+)
+args = parser.parse_args()
+
+symbol = args.symbol
+H = args.horizon_minutes
+mode = args.mode
+thr = args.thr
+asof_rows = args.asof_rows
+
 
 def add_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.sort_values("bucket").copy()
@@ -26,62 +59,123 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
 
     return df
 
-def main(symbol: str, horizon: int):
-    root = Path(__file__).resolve().parents[1]
 
-    model_path = root / "ml" / "models" / f"{symbol}_h{horizon}.joblib"
-    if not model_path.exists():
-        raise RuntimeError(f"Model not found: {model_path}. Train first.")
-
-    bundle = joblib.load(model_path)
-    model = bundle["model"]
-    feature_cols = bundle["feature_cols"]
-
-    data_path = root / "ml" / "data" / f"{symbol}_ohlcv_1m.parquet"
-    if not data_path.exists():
-        raise RuntimeError(f"Data not found: {data_path}. Export first.")
-
+def load_latest_feature_row(data_path: Path, feature_cols: list[str], asof_rows: int):
     df = pd.read_parquet(data_path)
     df["bucket"] = pd.to_datetime(df["bucket"], utc=True, errors="coerce")
-    df = df.dropna(subset=["bucket"])
+    df = df.dropna(subset=["bucket"]).sort_values("bucket")
 
-    df = add_features(df)
-    df = df.dropna(subset=feature_cols)
+    df_tail = df.tail(asof_rows).copy()
+    df_tail = add_features(df_tail)
 
-    last = df.iloc[-1]
-    X = last[feature_cols].values.reshape(1, -1)
+    df_tail = df_tail.dropna(subset=feature_cols)
+    if df_tail.empty:
+        raise RuntimeError("Not enough recent data to compute features. Increase --asof_rows.")
 
-    p_up = float(model.predict_proba(X)[0, 1])
-    direction = "UP" if p_up >= 0.5 else "DOWN"
+    last = df_tail.iloc[-1]
+    asof_bucket = last["bucket"]
+    asof_close = float(last["close"])
+    X = last[feature_cols].values.astype(float).reshape(1, -1)
+    return asof_bucket, asof_close, X
 
-    conf = abs(p_up - 0.5) * 2  # 0..1
-    if conf >= 0.6:
-        confidence = "HIGH"
-    elif conf >= 0.35:
-        confidence = "MED"
+
+def main():
+    root = Path(__file__).resolve().parents[1]
+    data_path = root / "ml" / "data" / f"{symbol}_ohlcv_1m.parquet"
+    if not data_path.exists():
+        out = {
+            "ok": False,
+            "error": "Missing data file for this symbol",
+            "symbol": symbol,
+            "expected_data_path": str(data_path),
+            "hint": f"Run: python ml/export_ohlcv.py {symbol} 14",
+        }
+        print(json.dumps(out))
+        return
+
+    models_dir = root / "ml" / "models"
+
+    # ✅ IMPORTANT CHANGE:
+    # Mode A models should NOT use thr in the filename.
+    if mode == "A":
+        model_path = models_dir / f"{symbol}_h{H}_A.joblib"
     else:
-        confidence = "LOW"
+        thr_tag = str(thr).replace(".", "p")
+        model_path = models_dir / f"{symbol}_h{H}_D_thr{thr_tag}.joblib"
 
-    out = {
-        "symbol": symbol,
-        "horizon_minutes": horizon,
-        "asof_bucket": last["bucket"].isoformat(),
-        "asof_close": float(last["close"]),
-        "prob_up": p_up,
-        "direction": direction,
-        "confidence": confidence,
-        "model_metrics": bundle.get("metrics", {}),
-    }
+    if not model_path.exists():
+        out = {
+            "ok": False,
+            "error": "Model not trained for this selection",
+            "symbol": symbol,
+            "horizon_minutes": H,
+            "mode": mode,
+            "thr": thr if mode == "D" else None,
+            "expected_model_path": str(model_path),
+            "train_command": (
+                f"python ml/train_forecast.py {symbol} {H} --mode {mode}"
+                + (f" --thr {thr}" if mode == "D" else "")
+            ),
+        }
+        print(json.dumps(out))
+        return
 
-    # Print JSON to stdout (API will capture this)
-    import json
+    payload = joblib.load(model_path)
+    model = payload["model"]
+    feature_cols = payload["feature_cols"]
+    metrics = payload.get("metrics", {})
+
+    asof_bucket, asof_close, X = load_latest_feature_row(data_path, feature_cols, asof_rows)
+
+    prob = float(model.predict_proba(X)[:, 1][0])
+
+    # confidence bands for dashboard
+    if prob >= 0.70 or prob <= 0.30:
+        conf = "HIGH"
+    elif prob >= 0.60 or prob <= 0.40:
+        conf = "MED"
+    else:
+        conf = "LOW"
+
+    if mode == "A":
+        out = {
+            "ok": True,
+            "symbol": symbol,
+            "horizon_minutes": H,
+            "mode": "A",
+            "asof_bucket": asof_bucket.isoformat(),
+            "asof_close": asof_close,
+            "prob_up": prob,
+            "direction": "UP" if prob >= 0.5 else "DOWN",
+            "confidence": conf,
+            "model_metrics": {
+                "auc_mean": metrics.get("auc_mean"),
+                "prauc_mean": metrics.get("prauc_mean"),
+                "prauc_baseline": metrics.get("prauc_baseline"),
+            },
+        }
+    else:
+        out = {
+            "ok": True,
+            "symbol": symbol,
+            "horizon_minutes": H,
+            "mode": "D",
+            "thr": thr,
+            "asof_bucket": asof_bucket.isoformat(),
+            "asof_close": asof_close,
+            "prob_strong_up": prob,
+            "signal": "STRONG_UP" if prob >= 0.5 else "NO_SIGNAL",
+            "confidence": conf,
+            "model_metrics": {
+                "auc_mean": metrics.get("auc_mean"),
+                "prauc_mean": metrics.get("prauc_mean"),
+                "prauc_baseline": metrics.get("prauc_baseline"),
+                "positive_rate": payload.get("positive_rate"),
+            },
+        }
+
     print(json.dumps(out))
 
-if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python ml/predict.py <SYMBOL> [HORIZON_MINUTES]")
-        raise SystemExit(1)
 
-    symbol = sys.argv[1]
-    horizon = int(sys.argv[2]) if len(sys.argv) >= 3 else 60
-    main(symbol, horizon)
+if __name__ == "__main__":
+    main()
