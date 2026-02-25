@@ -1,65 +1,62 @@
 import { NextResponse } from "next/server";
-import { spawn } from "child_process";
-import path from "path";
 
-type Params = { symbol: string };
+export const runtime = "edge";
+export const dynamic = "force-dynamic";
 
-export async function GET(req: Request, { params }: { params: Params }): Promise<Response> {
+function asRecord(x: unknown): Record<string, unknown> | null {
+  return x && typeof x === "object" ? (x as Record<string, unknown>) : null;
+}
+
+function pickErrorMessage(payload: unknown): string | null {
+  const r = asRecord(payload);
+  const err = r?.error;
+  return typeof err === "string" ? err : null;
+}
+
+export async function GET(req: Request, ctx: { params: { symbol: string } }) {
   try {
-    const { searchParams } = new URL(req.url);
+    const { symbol } = ctx.params;
+    const url = new URL(req.url);
 
-    const mode = (searchParams.get("mode") ?? "D").toUpperCase(); // A or D
-    const horizon = Number(searchParams.get("horizon") ?? "60");
-    const thr = Number(searchParams.get("thr") ?? "0.0035");
-
-    const symbol = String(params.symbol || "").toUpperCase();
-
-    // ✅ build command args exactly like your local calls
-    const args: string[] = [path.join("ml", "predict.py"), symbol, String(horizon), "--mode", mode];
-
-    // only include thr for D mode
-    if (mode === "D") {
-      args.push("--thr", String(thr));
+    // forward query params as-is
+    const base = process.env.DATA_API_BASE_URL;
+    if (!base) {
+      return NextResponse.json(
+        { ok: false, error: "Missing env DATA_API_BASE_URL" },
+        { status: 500 }
+      );
     }
 
-    const pythonExe =
-      process.env.PYTHON_EXE ||
-      (process.platform === "win32" ? ".\\.venv-ml\\Scripts\\python.exe" : "./.venv-ml/bin/python");
+    // Example backend endpoint:
+    // `${DATA_API_BASE_URL}/symbol/BTCUSD?tf=1m&limit=500`
+    const backend = new URL(
+      `${base.replace(/\/+$/, "")}/symbol/${encodeURIComponent(symbol)}`
+    );
 
-    const cwd = process.cwd();
+    url.searchParams.forEach((v, k) => backend.searchParams.set(k, v));
 
-    const output = await new Promise<string>((resolve, reject) => {
-      const p = spawn(pythonExe, args, { cwd });
-
-      let stdout = "";
-      let stderr = "";
-
-      p.stdout.on("data", (d) => (stdout += d.toString()));
-      p.stderr.on("data", (d) => (stderr += d.toString()));
-
-      p.on("error", reject);
-
-      p.on("close", (code) => {
-        if (code !== 0) {
-          reject(new Error(stderr || `predict.py exited with code ${code}`));
-        } else {
-          resolve(stdout.trim());
-        }
-      });
+    const r = await fetch(backend.toString(), {
+      method: "GET",
+      headers: { accept: "application/json" },
+      cache: "no-store",
     });
 
-    // predict.py prints JSON
-    const parsed = JSON.parse(output);
+    const payload: unknown = await r.json().catch(() => null);
 
-    // ✅ always return a proper Response type
-    return NextResponse.json(parsed);
-  } catch (err: any) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: err?.message ?? "Prediction failed",
-      },
-      { status: 500 }
-    );
+    if (!r.ok) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: pickErrorMessage(payload) ?? `Backend error (${r.status})`,
+          raw: payload,
+        },
+        { status: 502 }
+      );
+    }
+
+    return NextResponse.json(payload, { status: 200 });
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : "Unexpected error";
+    return NextResponse.json({ ok: false, error: msg }, { status: 500 });
   }
 }

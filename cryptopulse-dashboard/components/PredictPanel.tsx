@@ -3,41 +3,66 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type Mode = "A" | "D";
+type Confidence = "LOW" | "MED" | "HIGH";
 
-type PredictResponse =
-  | {
-      ok: true;
-      symbol: string;
-      horizon_minutes: number;
-      mode: "A";
-      asof_bucket: string;
-      asof_close: number;
-      prob_up: number;
-      direction: "UP" | "DOWN";
-      confidence: "LOW" | "MED" | "HIGH";
-      model_metrics?: any;
-    }
-  | {
-      ok: true;
-      symbol: string;
-      horizon_minutes: number;
-      mode: "D";
-      thr: number;
-      asof_bucket: string;
-      asof_close: number;
-      prob_strong_up: number;
-      signal: "STRONG_UP" | "NO_SIGNAL";
-      confidence: "LOW" | "MED" | "HIGH";
-      model_metrics?: any;
-    }
-  | {
-      ok: false;
-      error: string;
-      [k: string]: any;
-    };
+type ModelMetrics = {
+  auc_mean?: number;
+  prauc_mean?: number;
+  prauc_baseline?: number;
+  positive_rate?: number;
+};
+
+type PredictSuccessA = {
+  ok: true;
+  symbol: string;
+  horizon_minutes: number;
+  mode: "A";
+  asof_bucket: string;
+  asof_close: number;
+  prob_up: number;
+  direction: "UP" | "DOWN";
+  confidence: Confidence;
+  model_metrics?: ModelMetrics;
+};
+
+type PredictSuccessD = {
+  ok: true;
+  symbol: string;
+  horizon_minutes: number;
+  mode: "D";
+  thr: number;
+  asof_bucket: string;
+  asof_close: number;
+  prob_strong_up: number;
+  signal: "STRONG_UP" | "NO_SIGNAL";
+  confidence: Confidence;
+  model_metrics?: ModelMetrics;
+};
+
+type PredictError = {
+  ok: false;
+  error: string;
+  // allow backend to send extra debug fields safely (no `any`)
+  details?: unknown;
+  raw?: unknown;
+};
+
+type PredictResponse = PredictSuccessA | PredictSuccessD | PredictError;
 
 function pct(x: number) {
   return `${(x * 100).toFixed(2)}%`;
+}
+
+function isPredictResponse(x: unknown): x is PredictResponse {
+  if (!x || typeof x !== "object") return false;
+  const obj = x as Record<string, unknown>;
+  return typeof obj.ok === "boolean";
+}
+
+function getErrorMessage(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  if (typeof e === "string") return e;
+  return "Fetch failed";
 }
 
 export default function PredictPanel({
@@ -58,7 +83,6 @@ export default function PredictPanel({
   const [err, setErr] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
 
-  // Abort any in-flight request when user changes inputs / refresh interval triggers
   const abortRef = useRef<AbortController | null>(null);
 
   const requestUrl = useMemo(() => {
@@ -82,38 +106,48 @@ export default function PredictPanel({
         method: "GET",
         cache: "no-store",
         signal: controller.signal,
-        headers: { "accept": "application/json" },
+        headers: { accept: "application/json" },
       });
 
-      const json = (await res.json()) as PredictResponse;
-      setData(json);
+      const jsonUnknown: unknown = await res.json().catch(() => null);
+
+      if (!isPredictResponse(jsonUnknown)) {
+        setData({ ok: false, error: "Invalid API response shape", raw: jsonUnknown });
+        setErr("Invalid API response shape");
+        return;
+      }
+
+      setData(jsonUnknown);
 
       if (!res.ok) {
-        const msg =
-          (json as any)?.error ||
-          `Request failed (${res.status} ${res.statusText})`;
-        setErr(msg);
-      } else if (!("ok" in json) || json.ok !== true) {
-        setErr((json as any).error ?? "Unknown API error");
-      } else {
-        setLastUpdated(new Date().toLocaleString());
+        setErr(
+          jsonUnknown.ok === false
+            ? jsonUnknown.error
+            : `Request failed (${res.status} ${res.statusText})`
+        );
+        return;
       }
-    } catch (e: any) {
-      if (e?.name === "AbortError") return; // user changed settings quickly
-      setErr(e?.message ?? "Fetch failed");
+
+      if (jsonUnknown.ok !== true) {
+        setErr(jsonUnknown.error ?? "Unknown API error");
+        return;
+      }
+
+      setLastUpdated(new Date().toLocaleString());
+    } catch (e: unknown) {
+      if (e instanceof DOMException && e.name === "AbortError") return;
+      setErr(getErrorMessage(e));
       setData(null);
     } finally {
       setLoading(false);
     }
   }, [requestUrl]);
 
-  // initial load + refresh when settings change
   useEffect(() => {
     fetchPredict();
     return () => abortRef.current?.abort();
   }, [fetchPredict]);
 
-  // auto refresh
   useEffect(() => {
     if (!autoRefresh) return;
     const ms = Math.max(5, refreshSec) * 1000;
@@ -124,7 +158,7 @@ export default function PredictPanel({
   const badge = (text: string, tone: "green" | "red" | "gray" | "blue") => {
     const base =
       "inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold";
-    const map = {
+    const map: Record<typeof tone, string> = {
       green: "bg-green-100 text-green-800",
       red: "bg-red-100 text-red-800",
       gray: "bg-gray-100 text-gray-800",
@@ -240,9 +274,7 @@ export default function PredictPanel({
           <span className="text-xs text-gray-500">sec</span>
         </div>
 
-        <div className="ml-auto text-xs text-gray-500 break-all">
-          {requestUrl}
-        </div>
+        <div className="ml-auto text-xs text-gray-500 break-all">{requestUrl}</div>
       </div>
 
       {/* Result */}
@@ -255,7 +287,7 @@ export default function PredictPanel({
 
         {!data ? (
           <div className="text-sm text-gray-500">No result yet.</div>
-        ) : (data as any).ok === false ? (
+        ) : data.ok === false ? (
           <pre className="overflow-auto rounded-lg bg-white p-3 text-xs">
             {JSON.stringify(data, null, 2)}
           </pre>
@@ -277,15 +309,11 @@ export default function PredictPanel({
             <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
               <div className="rounded-xl bg-white p-3">
                 <div className="text-xs text-gray-500">Prob strong UP</div>
-                <div className="text-2xl font-semibold">
-                  {pct(data.prob_strong_up)}
-                </div>
+                <div className="text-2xl font-semibold">{pct(data.prob_strong_up)}</div>
               </div>
               <div className="rounded-xl bg-white p-3">
                 <div className="text-xs text-gray-500">As of (bucket)</div>
-                <div className="text-sm font-medium break-all">
-                  {data.asof_bucket}
-                </div>
+                <div className="text-sm font-medium break-all">{data.asof_bucket}</div>
               </div>
               <div className="rounded-xl bg-white p-3">
                 <div className="text-xs text-gray-500">As of close</div>
@@ -327,9 +355,7 @@ export default function PredictPanel({
               </div>
               <div className="rounded-xl bg-white p-3">
                 <div className="text-xs text-gray-500">As of (bucket)</div>
-                <div className="text-sm font-medium break-all">
-                  {data.asof_bucket}
-                </div>
+                <div className="text-sm font-medium break-all">{data.asof_bucket}</div>
               </div>
               <div className="rounded-xl bg-white p-3">
                 <div className="text-xs text-gray-500">As of close</div>
@@ -352,12 +378,8 @@ export default function PredictPanel({
 
         <div className="mt-3">
           <details className="rounded-xl bg-white p-3">
-            <summary className="cursor-pointer text-sm font-medium">
-              Raw JSON
-            </summary>
-            <pre className="mt-2 overflow-auto text-xs">
-              {JSON.stringify(data, null, 2)}
-            </pre>
+            <summary className="cursor-pointer text-sm font-medium">Raw JSON</summary>
+            <pre className="mt-2 overflow-auto text-xs">{JSON.stringify(data, null, 2)}</pre>
           </details>
         </div>
       </div>

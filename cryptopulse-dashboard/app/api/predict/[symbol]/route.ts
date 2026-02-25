@@ -1,172 +1,67 @@
-import { NextRequest, NextResponse } from "next/server";
-import path from "path";
-import fs from "fs";
-import { spawn } from "child_process";
+import { NextResponse } from "next/server";
 
-export const runtime = "nodejs";
+export const runtime = "edge";
+export const dynamic = "force-dynamic";
 
-function asNumber(v: string | null, fallback: number) {
-  const n = v ? Number(v) : NaN;
-  return Number.isFinite(n) ? n : fallback;
+type Mode = "A" | "D";
+
+function asRecord(x: unknown): Record<string, unknown> | null {
+  return x && typeof x === "object" ? (x as Record<string, unknown>) : null;
 }
 
-function asMode(v: string | null) {
-  const m = (v || "D").toUpperCase();
-  return m === "A" || m === "D" ? m : "D";
+function pickErrorMessage(payload: unknown): string | null {
+  const r = asRecord(payload);
+  const err = r?.error;
+  return typeof err === "string" ? err : null;
 }
 
-/**
- * Walk upward from a starting directory to find the repo root
- * by locating ml/predict.py.
- */
-function findRepoRoot(startDir: string, maxUp = 8): string | null {
-  let dir = startDir;
-  for (let i = 0; i <= maxUp; i++) {
-    const candidate = path.join(dir, "ml", "predict.py");
-    if (fs.existsSync(candidate)) return dir;
-    const parent = path.dirname(dir);
-    if (parent === dir) break; // reached filesystem root
-    dir = parent;
-  }
-  return null;
-}
+export async function GET(req: Request, ctx: { params: { symbol: string } }) {
+  try {
+    const { symbol } = ctx.params;
+    const url = new URL(req.url);
 
-export async function GET(
-  req: NextRequest,
-  context: { params: Promise<{ symbol: string }> }
-) {
-  const { symbol: rawSymbol } = await context.params;
-  const symbol = (rawSymbol || "").toUpperCase();
+    const mode = (url.searchParams.get("mode") ?? "D") as Mode;
+    const horizon = url.searchParams.get("horizon") ?? "60";
+    const thr = url.searchParams.get("thr");
 
-  const url = new URL(req.url);
-  const horizon = asNumber(url.searchParams.get("horizon"), 60);
-  const mode = asMode(url.searchParams.get("mode"));
-  const thr = asNumber(url.searchParams.get("thr"), 0.0035);
-  const asofRows = asNumber(url.searchParams.get("asof_rows"), 250);
-
-  // 🔥 Robust root detection (no assumptions about process.cwd)
-  const cwd = process.cwd();
-  const repoRoot = findRepoRoot(cwd) ?? findRepoRoot(path.resolve(cwd, "..")) ?? null;
-
-  if (!repoRoot) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: "Could not locate repo root (ml/predict.py not found).",
-        cwd,
-        hint: "Start `npm run dev` from inside `cryptopulse-dashboard` or repo root.",
-      },
-      { status: 500 }
-    );
-  }
-
-  const scriptPath = path.join(repoRoot, "ml", "predict.py");
-  const pyExe = path.join(repoRoot, ".venv-ml", "Scripts", "python.exe");
-
-  // Validate paths before spawn (prevents ENOENT crash)
-  const existsScript = fs.existsSync(scriptPath);
-  const existsPy = fs.existsSync(pyExe);
-
-  if (!existsScript || !existsPy) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: "Required file not found.",
-        repoRoot,
-        cwd,
-        scriptPath,
-        existsScript,
-        pyExe,
-        existsPy,
-        fix: [
-          "Make sure .venv-ml exists at repo root: <repo>/.venv-ml/Scripts/python.exe",
-          "If your venv is elsewhere, move/copy it to repo root or recreate it there.",
-        ],
-      },
-      { status: 500 }
-    );
-  }
-
-  const args: string[] = [
-    scriptPath,
-    symbol,
-    String(horizon),
-    "--mode",
-    mode,
-    "--thr",
-    String(thr),
-    "--asof_rows",
-    String(asofRows),
-  ];
-
-  return await new Promise((resolve) => {
-    const child = spawn(pyExe, args, { cwd: repoRoot });
-
-    let stdout = "";
-    let stderr = "";
-
-    // ✅ handle spawn error (prevents uncaughtException)
-    child.on("error", (err: any) => {
-      resolve(
-        NextResponse.json(
-          {
-            ok: false,
-            error: "Failed to spawn python process",
-            message: err?.message ?? String(err),
-            repoRoot,
-            cwd,
-            pyExe,
-            scriptPath,
-            args,
-          },
-          { status: 500 }
-        )
+    const base = process.env.PREDICT_API_BASE_URL;
+    if (!base) {
+      return NextResponse.json(
+        { ok: false, error: "Missing env PREDICT_API_BASE_URL" },
+        { status: 500 }
       );
+    }
+
+    const backend = new URL(
+      `${base.replace(/\/+$/, "")}/predict/${encodeURIComponent(symbol)}`
+    );
+    backend.searchParams.set("mode", mode);
+    backend.searchParams.set("horizon", String(horizon));
+    if (mode === "D" && thr) backend.searchParams.set("thr", String(thr));
+
+    const r = await fetch(backend.toString(), {
+      method: "GET",
+      headers: { accept: "application/json" },
+      cache: "no-store",
     });
 
-    child.stdout.on("data", (d) => (stdout += d.toString()));
-    child.stderr.on("data", (d) => (stderr += d.toString()));
+    const payload: unknown = await r.json().catch(() => null);
 
-    child.on("close", (code) => {
-      if (code !== 0) {
-        resolve(
-          NextResponse.json(
-            {
-              ok: false,
-              error: "predict.py exited with non-zero code",
-              code,
-              repoRoot,
-              cwd,
-              stderr: stderr || null,
-              stdout: stdout || null,
-              pyExe,
-              scriptPath,
-              args,
-            },
-            { status: 500 }
-          )
-        );
-        return;
-      }
+    if (!r.ok) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: pickErrorMessage(payload) ?? `Backend error (${r.status})`,
+          raw: payload,
+        },
+        { status: 502 }
+      );
+    }
 
-      try {
-        const obj = JSON.parse(stdout.trim());
-        resolve(NextResponse.json({ ok: true, ...obj }));
-      } catch {
-        resolve(
-          NextResponse.json(
-            {
-              ok: false,
-              error: "predict.py output was not valid JSON",
-              repoRoot,
-              cwd,
-              stdout: stdout.trim(),
-              stderr: stderr || null,
-            },
-            { status: 500 }
-          )
-        );
-      }
-    });
-  });
+    // pass-through success payload as-is
+    return NextResponse.json(payload, { status: 200 });
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : "Unexpected error";
+    return NextResponse.json({ ok: false, error: msg }, { status: 500 });
+  }
 }
