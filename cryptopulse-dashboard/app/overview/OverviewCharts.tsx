@@ -12,6 +12,8 @@ import {
   Bar,
 } from "recharts";
 
+import type { NameType, ValueType } from "recharts/types/component/DefaultTooltipContent";
+
 type Point = {
   bucket: string;
   market_index: number | null;
@@ -43,6 +45,17 @@ const tooltipContentStyle: React.CSSProperties = {
 const tooltipLabelStyle: React.CSSProperties = {
   color: "rgba(255,255,255,0.85)",
 };
+
+function tooltipNumberFormatter(value: ValueType, _name: NameType): [string, string] {
+  const num =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+      ? Number(value)
+      : NaN;
+
+  return [fmtNum(Number.isFinite(num) ? num : null), ""];
+}
 
 export default function OverviewCharts({ series }: { series: Point[] }) {
   const data = (series ?? []).map((p) => ({
@@ -84,7 +97,7 @@ export default function OverviewCharts({ series }: { series: Point[] }) {
               />
 
               <Tooltip
-                formatter={(v: any) => fmtNum(typeof v === "number" ? v : Number(v))}
+                formatter={tooltipNumberFormatter}
                 labelFormatter={(label) => `Time: ${label}`}
                 contentStyle={tooltipContentStyle}
                 labelStyle={tooltipLabelStyle}
@@ -123,7 +136,7 @@ export default function OverviewCharts({ series }: { series: Point[] }) {
               />
 
               <Tooltip
-                formatter={(v: any) => fmtNum(typeof v === "number" ? v : Number(v))}
+                formatter={tooltipNumberFormatter}                
                 labelFormatter={(label) => `Time: ${label}`}
                 contentStyle={tooltipContentStyle}
                 labelStyle={tooltipLabelStyle}

@@ -12,6 +12,7 @@ import {
   BarChart,
   Bar,
 } from "recharts";
+import type { NameType, ValueType } from "recharts/types/component/DefaultTooltipContent";
 
 type Point = {
   bucket: string;
@@ -50,6 +51,39 @@ const tooltipLabelStyle: React.CSSProperties = {
   color: "rgba(255,255,255,0.85)",
 };
 
+function tooltipValueFormatter(value: ValueType, name: NameType): [string, string] {
+  const label = typeof name === "string" ? name : String(name);
+
+  const num =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+      ? Number(value)
+      : NaN;
+
+  const pretty = Number.isFinite(num)
+    ? Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(num)
+    : "—";
+
+  return [pretty, label];
+}
+function tooltipVolumeFormatter(value: ValueType, name: NameType): [string, string] {
+  const label = typeof name === "string" ? name : String(name);
+
+  const num =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+      ? Number(value)
+      : NaN;
+
+  const pretty = Number.isFinite(num)
+    ? Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(num)
+    : "—";
+
+  return [pretty, label];
+}
+
 export default function SymbolCharts({ points }: { points: Point[] }) {
   // Keep charts smooth by downsampling if you have 1440 points
   const step = points.length > 600 ? Math.ceil(points.length / 600) : 1;
@@ -87,8 +121,8 @@ export default function SymbolCharts({ points }: { points: Point[] }) {
               <Tooltip
                 contentStyle={tooltipContentStyle}
                 labelStyle={tooltipLabelStyle}
-                labelFormatter={(l) => new Date(l).toLocaleString()}
-                formatter={(value: any) => [fmtNum(value, 2), "Close"]}
+                labelFormatter={(l) => new Date(String(l)).toLocaleString()}
+                formatter={tooltipValueFormatter} 
               />
 
               <Line
@@ -133,8 +167,8 @@ export default function SymbolCharts({ points }: { points: Point[] }) {
               <Tooltip
                 contentStyle={tooltipContentStyle}
                 labelStyle={tooltipLabelStyle}
-                labelFormatter={(l) => new Date(l).toLocaleString()}
-                formatter={(value: any) => [fmtNum(value, 0), "Volume"]}
+                labelFormatter={(l) => new Date(String(l)).toLocaleString()}
+                formatter={tooltipVolumeFormatter}  
               />
 
               <Bar
