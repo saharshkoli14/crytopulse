@@ -31,7 +31,7 @@ function fmtNum(x: number | null | undefined) {
   return Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(x);
 }
 
-// Dark-theme chart styles (so axes/grid/tooltip are visible on your new background)
+// Dark-theme chart styles (so axes/grid/tooltip are visible on your background)
 const AXIS_STROKE = "rgba(255,255,255,0.55)";
 const TICK_FILL = "rgba(255,255,255,0.75)";
 const GRID_STROKE = "rgba(255,255,255,0.10)";
@@ -47,11 +47,9 @@ const tooltipLabelStyle: React.CSSProperties = {
   color: "rgba(255,255,255,0.85)",
 };
 
-// ✅ FIX: Recharts formatter value can be undefined, so accept value?: ValueType
+// ✅ Recharts can pass undefined; accept value?: ValueType and name?: NameType
 function tooltipNumberFormatter(value?: ValueType, name?: NameType): [string, string] {
-  if (value === null || value === undefined) {
-    return ["—", String(name ?? "")];
-  }
+  if (value === null || value === undefined) return ["—", String(name ?? "")];
 
   const num =
     typeof value === "number"
@@ -90,7 +88,7 @@ export default function OverviewCharts({ series }: { series: Point[] }) {
               />
 
               <YAxis
-                tickFormatter={(v) => String(Math.round(v))}
+                tickFormatter={(v) => String(Math.round(Number(v)))}
                 stroke={AXIS_STROKE}
                 tick={{ fill: TICK_FILL, fontSize: 12 }}
                 tickLine={{ stroke: AXIS_STROKE }}
