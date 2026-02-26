@@ -1,5 +1,6 @@
 "use client";
 
+import React from "react";
 import {
   ResponsiveContainer,
   LineChart,
@@ -46,7 +47,12 @@ const tooltipLabelStyle: React.CSSProperties = {
   color: "rgba(255,255,255,0.85)",
 };
 
-function tooltipNumberFormatter(value: ValueType, _name: NameType): [string, string] {
+// ✅ FIX: Recharts formatter value can be undefined, so accept value?: ValueType
+function tooltipNumberFormatter(value?: ValueType, name?: NameType): [string, string] {
+  if (value === null || value === undefined) {
+    return ["—", String(name ?? "")];
+  }
+
   const num =
     typeof value === "number"
       ? value
@@ -54,7 +60,7 @@ function tooltipNumberFormatter(value: ValueType, _name: NameType): [string, str
       ? Number(value)
       : NaN;
 
-  return [fmtNum(Number.isFinite(num) ? num : null), ""];
+  return [fmtNum(Number.isFinite(num) ? num : null), String(name ?? "")];
 }
 
 export default function OverviewCharts({ series }: { series: Point[] }) {
@@ -66,12 +72,7 @@ export default function OverviewCharts({ series }: { series: Point[] }) {
   return (
     <section style={{ marginTop: 18, display: "grid", gap: 14 }}>
       {/* Market Index */}
-      <div
-        className="glass"
-        style={{
-          padding: 14,
-        }}
-      >
+      <div className="glass" style={{ padding: 14 }}>
         <h3 style={{ marginTop: 0, marginBottom: 10 }}>Market Index (base=100)</h3>
 
         <div style={{ height: 280 }}>
@@ -103,7 +104,6 @@ export default function OverviewCharts({ series }: { series: Point[] }) {
                 labelStyle={tooltipLabelStyle}
               />
 
-              {/* Let the theme decide the line color; keep it visible with a thicker stroke */}
               <Line type="monotone" dataKey="market_index" dot={false} strokeWidth={2} />
             </LineChart>
           </ResponsiveContainer>
@@ -136,13 +136,12 @@ export default function OverviewCharts({ series }: { series: Point[] }) {
               />
 
               <Tooltip
-                formatter={tooltipNumberFormatter}                
+                formatter={tooltipNumberFormatter}
                 labelFormatter={(label) => `Time: ${label}`}
                 contentStyle={tooltipContentStyle}
                 labelStyle={tooltipLabelStyle}
               />
 
-              {/* Bar with a visible fill on dark background */}
               <Bar dataKey="total_volume" fill="rgba(99,102,241,0.65)" />
             </BarChart>
           </ResponsiveContainer>
