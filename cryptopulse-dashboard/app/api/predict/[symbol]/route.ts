@@ -7,12 +7,11 @@ export const dynamic = "force-dynamic";
 type Mode = "A" | "D";
 type Confidence = "LOW" | "MED" | "HIGH";
 
-// ====== CHANGE THESE TO MATCH YOUR DB ======
-const TABLE = "candles_1m"; // your candle table
+// ✅ Your real table:
+const TABLE = "public.ohlcv_1m";
 const COL_SYMBOL = "symbol";
 const COL_BUCKET = "bucket";
 const COL_CLOSE = "close";
-// ==========================================
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -29,7 +28,6 @@ function clamp(n: number, lo: number, hi: number) {
 }
 
 function confidenceFrom(p: number, n: number): Confidence {
-  // super simple heuristic confidence
   if (n >= 600 && (p <= 0.35 || p >= 0.65)) return "HIGH";
   if (n >= 250) return "MED";
   return "LOW";
@@ -37,7 +35,7 @@ function confidenceFrom(p: number, n: number): Confidence {
 
 export async function GET(
   req: NextRequest,
-  ctx: { params: Promise<{ symbol: string }> } // ✅ Next.js 15
+  ctx: { params: Promise<{ symbol: string }> }
 ) {
   try {
     mustEnv("DATABASE_URL", process.env.DATABASE_URL);
@@ -46,14 +44,19 @@ export async function GET(
     const url = new URL(req.url);
 
     const mode = (url.searchParams.get("mode") ?? "D") as Mode;
-    const horizonMinutes = clamp(Number(url.searchParams.get("horizon") ?? "60"), 5, 240);
-    const thr = clamp(Number(url.searchParams.get("thr") ?? "0.0035"), 0.0005, 0.05); // 0.35% default
+    const horizonMinutes = clamp(
+      Number(url.searchParams.get("horizon") ?? "60"),
+      5,
+      240
+    );
+    const thr = clamp(
+      Number(url.searchParams.get("thr") ?? "0.0035"),
+      0.0005,
+      0.05
+    );
 
-    // Assumption: table is 1-minute candles.
-    // horizonMinutes means horizonSteps = horizonMinutes.
+    // 1-minute candles assumption
     const horizonSteps = horizonMinutes;
-
-    // Pull enough rows for evaluation + horizon shifting
     const LIMIT = clamp(1200 + horizonSteps, 300, 5000);
 
     const sql = `
@@ -76,15 +79,12 @@ export async function GET(
       );
     }
 
-    // rows are DESC; reverse to ASC for time math
     const asc = [...rows].reverse();
-
     const latest = asc[asc.length - 1];
+
     const asof_bucket = latest.bucket;
     const asof_close = Number(latest.close);
 
-    // Build labels from historical transitions:
-    // For each i, compare close[i+h] vs close[i]
     let total = 0;
     let up = 0;
     let strongUp = 0;
@@ -132,32 +132,32 @@ export async function GET(
         },
         { status: 200 }
       );
-    } else {
-      const prob_strong_up = strongUp / total;
-      const signal = prob_strong_up >= 0.5 ? "STRONG_UP" : "NO_SIGNAL";
-      const confidence = confidenceFrom(prob_strong_up, total);
-
-      return NextResponse.json(
-        {
-          ok: true,
-          symbol,
-          horizon_minutes: horizonMinutes,
-          mode: "D",
-          thr,
-          asof_bucket,
-          asof_close,
-          prob_strong_up,
-          signal,
-          confidence,
-          model_metrics: {
-            positive_rate: prob_strong_up,
-            samples: total,
-            note: "Heuristic strong-up probability from historical horizon returns",
-          },
-        },
-        { status: 200 }
-      );
     }
+
+    const prob_strong_up = strongUp / total;
+    const signal = prob_strong_up >= 0.5 ? "STRONG_UP" : "NO_SIGNAL";
+    const confidence = confidenceFrom(prob_strong_up, total);
+
+    return NextResponse.json(
+      {
+        ok: true,
+        symbol,
+        horizon_minutes: horizonMinutes,
+        mode: "D",
+        thr,
+        asof_bucket,
+        asof_close,
+        prob_strong_up,
+        signal,
+        confidence,
+        model_metrics: {
+          positive_rate: prob_strong_up,
+          samples: total,
+          note: "Heuristic strong-up probability from historical horizon returns",
+        },
+      },
+      { status: 200 }
+    );
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : "Unexpected error";
     return NextResponse.json({ ok: false, error: msg }, { status: 500 });
