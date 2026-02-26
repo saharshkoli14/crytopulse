@@ -39,6 +39,22 @@ type Normalized = {
   };
 };
 
+type UnknownRecord = Record<string, unknown>;
+
+function isRecord(v: unknown): v is UnknownRecord {
+  return typeof v === "object" && v !== null;
+}
+
+function getProp(obj: unknown, key: string): unknown {
+  if (!isRecord(obj)) return undefined;
+  return obj[key];
+}
+
+function toStr(v: unknown): string | null {
+  if (v === null || v === undefined) return null;
+  return String(v);
+}
+
 function toNum(v: unknown): number | null {
   if (v === null || v === undefined) return null;
   const n = typeof v === "number" ? v : Number(v);
@@ -57,39 +73,38 @@ function fmtPct(x: number | null | undefined) {
   return `${s}${v.toFixed(2)}%`;
 }
 
-function normalize(raw: any, fallbackSymbol: string): Normalized {
+function normalize(raw: unknown, fallbackSymbol: string): Normalized {
   const updated =
-    raw?.updatedAt ??
-    raw?.updated_at ??
-    raw?.updated ??
-    raw?.updatedISO ??
+    getProp(raw, "updatedAt") ??
+    getProp(raw, "updated_at") ??
+    getProp(raw, "updated") ??
+    getProp(raw, "updatedISO") ??
     new Date().toISOString();
 
-  const points: Point[] = Array.isArray(raw?.points) ? raw.points : [];
+  const sym = getProp(raw, "symbol");
+  const symbol = sym ? String(sym) : fallbackSymbol;
 
-  const s = raw?.stats ?? {};
+  const pointsRaw = getProp(raw, "points");
+  const points: Point[] = Array.isArray(pointsRaw) ? (pointsRaw as Point[]) : [];
 
-  // support both camelCase + snake_case
-  const latestBucket = (s.latestBucket ?? s.latest_bucket ?? s.latest_bucket_ts ?? null) as string | null;
+  const statsRaw = getProp(raw, "stats");
 
-  const latestClose = toNum(s.latestClose ?? s.latest_close);
-  const pctChange24h = toNum(s.pctChange24h ?? s.pct_change_24h);
-  const high24h = toNum(s.high24h ?? s.high_24h);
-  const low24h = toNum(s.low24h ?? s.low_24h);
-  const volume24h = toNum(s.volume24h ?? s.volume_24h);
+  const latestBucket =
+    (toStr(getProp(statsRaw, "latestBucket")) ??
+      toStr(getProp(statsRaw, "latest_bucket")) ??
+      toStr(getProp(statsRaw, "latest_bucket_ts"))) ?? null;
+
+  const latestClose = toNum(getProp(statsRaw, "latestClose") ?? getProp(statsRaw, "latest_close"));
+  const pctChange24h = toNum(getProp(statsRaw, "pctChange24h") ?? getProp(statsRaw, "pct_change_24h"));
+  const high24h = toNum(getProp(statsRaw, "high24h") ?? getProp(statsRaw, "high_24h"));
+  const low24h = toNum(getProp(statsRaw, "low24h") ?? getProp(statsRaw, "low_24h"));
+  const volume24h = toNum(getProp(statsRaw, "volume24h") ?? getProp(statsRaw, "volume_24h"));
 
   return {
     updatedAtISO: String(updated),
-    symbol: String(raw?.symbol ?? fallbackSymbol),
+    symbol,
     points,
-    stats: {
-      latestBucket,
-      latestClose,
-      pctChange24h,
-      high24h,
-      low24h,
-      volume24h,
-    },
+    stats: { latestBucket, latestClose, pctChange24h, high24h, low24h, volume24h },
   };
 }
 
@@ -116,13 +131,11 @@ export default async function SymbolPage({ params }: PageProps) {
     );
   }
 
-  const raw = await res.json();
+  const raw = (await res.json()) as unknown;
   const data = normalize(raw, symbol);
 
   const updatedDate = new Date(data.updatedAtISO);
-  const updatedText = Number.isNaN(updatedDate.getTime())
-    ? data.updatedAtISO
-    : updatedDate.toLocaleString();
+  const updatedText = Number.isNaN(updatedDate.getTime()) ? data.updatedAtISO : updatedDate.toLocaleString();
 
   return (
     <main style={{ padding: 24, fontFamily: "system-ui", maxWidth: 1100, margin: "0 auto" }}>
@@ -137,7 +150,6 @@ export default async function SymbolPage({ params }: PageProps) {
         </Link>
       </header>
 
-      {/* Quick stats cards */}
       <section
         style={{
           marginTop: 16,
@@ -172,7 +184,6 @@ export default async function SymbolPage({ params }: PageProps) {
         </div>
       </section>
 
-      {/* Charts */}
       <SymbolCharts points={data.points} />
 
       <details style={{ marginTop: 16 }}>
