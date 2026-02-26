@@ -29,7 +29,8 @@ function toLocalTimeLabel(iso: string) {
   return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-function fmtNum(x: any, maxFrac = 2) {
+function fmtNum(x: unknown, maxFrac = 2) {
+  if (x === null || x === undefined) return "—";
   const n = typeof x === "number" ? x : Number(x);
   if (!Number.isFinite(n)) return "—";
   return Intl.NumberFormat("en-US", { maximumFractionDigits: maxFrac }).format(n);
@@ -51,8 +52,11 @@ const tooltipLabelStyle: React.CSSProperties = {
   color: "rgba(255,255,255,0.85)",
 };
 
-function tooltipValueFormatter(value: ValueType, name: NameType): [string, string] {
-  const label = typeof name === "string" ? name : String(name);
+// ✅ Recharts may pass undefined -> accept optional args
+function tooltipValueFormatter(value?: ValueType, name?: NameType): [string, string] {
+  const label = typeof name === "string" ? name : String(name ?? "");
+
+  if (value === null || value === undefined) return ["—", label];
 
   const num =
     typeof value === "number"
@@ -61,14 +65,15 @@ function tooltipValueFormatter(value: ValueType, name: NameType): [string, strin
       ? Number(value)
       : NaN;
 
-  const pretty = Number.isFinite(num)
-    ? Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(num)
-    : "—";
-
+  const pretty = Number.isFinite(num) ? fmtNum(num, 2) : "—";
   return [pretty, label];
 }
-function tooltipVolumeFormatter(value: ValueType, name: NameType): [string, string] {
-  const label = typeof name === "string" ? name : String(name);
+
+// ✅ Recharts may pass undefined -> accept optional args
+function tooltipVolumeFormatter(value?: ValueType, name?: NameType): [string, string] {
+  const label = typeof name === "string" ? name : String(name ?? "");
+
+  if (value === null || value === undefined) return ["—", label];
 
   const num =
     typeof value === "number"
@@ -122,14 +127,14 @@ export default function SymbolCharts({ points }: { points: Point[] }) {
                 contentStyle={tooltipContentStyle}
                 labelStyle={tooltipLabelStyle}
                 labelFormatter={(l) => new Date(String(l)).toLocaleString()}
-                formatter={tooltipValueFormatter} 
+                formatter={tooltipValueFormatter}
               />
 
               <Line
                 type="monotone"
                 dataKey="close"
                 dot={false}
-                stroke="rgba(96,165,250,0.95)" // visible blue on dark bg
+                stroke="rgba(96,165,250,0.95)"
                 strokeWidth={2.25}
                 isAnimationActive={false}
               />
@@ -168,14 +173,10 @@ export default function SymbolCharts({ points }: { points: Point[] }) {
                 contentStyle={tooltipContentStyle}
                 labelStyle={tooltipLabelStyle}
                 labelFormatter={(l) => new Date(String(l)).toLocaleString()}
-                formatter={tooltipVolumeFormatter}  
+                formatter={tooltipVolumeFormatter}
               />
 
-              <Bar
-                dataKey="volume"
-                isAnimationActive={false}
-                fill="rgba(99,102,241,0.65)" // visible purple bars
-              />
+              <Bar dataKey="volume" isAnimationActive={false} fill="rgba(99,102,241,0.65)" />
             </BarChart>
           </ResponsiveContainer>
         </div>
