@@ -5,7 +5,7 @@ import SymbolCharts from "./SymbolCharts";
 export const dynamic = "force-dynamic";
 
 type PageProps = {
-  params: { symbol: string };
+  params: Promise<{ symbol: string }>;
 };
 
 async function getBaseUrl() {
@@ -109,7 +109,8 @@ function normalize(raw: unknown, fallbackSymbol: string): Normalized {
 }
 
 export default async function SymbolPage({ params }: PageProps) {
-  const symbol = decodeURIComponent(params.symbol);
+  const { symbol: rawSymbol } = await params;
+  const symbol = decodeURIComponent(rawSymbol);
 
   const baseUrl = await getBaseUrl();
   const res = await fetch(`${baseUrl}/api/symbol/${encodeURIComponent(symbol)}`, {
