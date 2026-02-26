@@ -5,6 +5,8 @@ import { useEffect, useMemo, useState } from "react";
 type Mode = "A" | "D";
 type Confidence = "LOW" | "MED" | "HIGH";
 
+type ModelMetrics = Record<string, unknown>;
+
 type PredictOkA = {
   ok: true;
   symbol: string;
@@ -15,7 +17,7 @@ type PredictOkA = {
   prob_up: number;
   direction: "UP" | "DOWN";
   confidence: Confidence;
-  model_metrics?: any;
+  model_metrics?: ModelMetrics;
 };
 
 type PredictOkD = {
@@ -29,10 +31,10 @@ type PredictOkD = {
   prob_strong_up: number;
   signal: "STRONG_UP" | "NO_SIGNAL";
   confidence: Confidence;
-  model_metrics?: any;
+  model_metrics?: ModelMetrics;
 };
 
-type PredictErr = { ok: false; error: string; [k: string]: any };
+type PredictErr = { ok: false; error: string; [k: string]: unknown };
 type PredictResponse = PredictOkA | PredictOkD | PredictErr;
 
 function pct(x: number) {
@@ -108,6 +110,16 @@ const primaryButtonStyle: React.CSSProperties = {
   background: "rgba(99,102,241,0.35)",
   border: "1px solid rgba(99,102,241,0.55)",
 };
+
+function metricNumber(metrics: ModelMetrics | undefined, key: string, fallback = 0): number {
+  const v = metrics?.[key];
+  if (typeof v === "number") return v;
+  if (typeof v === "string") {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : fallback;
+  }
+  return fallback;
+}
 
 /** Simple tooltip icon + bubble */
 function InfoTip({ text }: { text: string }) {
@@ -224,7 +236,11 @@ export default function SimplePredict() {
         </p>
       </div>
 
-      <button onClick={run} disabled={loading} style={{ ...(primaryButtonStyle as any), opacity: loading ? 0.6 : 1 }}>
+      <button
+        onClick={run}
+        disabled={loading}
+        style={{ ...primaryButtonStyle, opacity: loading ? 0.6 : 1 }}
+      >
         {loading ? "Running..." : "Run prediction"}
       </button>
     </div>
@@ -284,7 +300,7 @@ export default function SimplePredict() {
           disabled={mode !== "D"}
           value={thr}
           onChange={(e) => setThr(Number(e.target.value))}
-          style={{ ...(inputStyle as any), cursor: mode === "D" ? "pointer" : "not-allowed" }}
+          style={{ ...inputStyle, cursor: mode === "D" ? "pointer" : "not-allowed" }}
         >
           <option value={0.0025}>0.25% (more frequent)</option>
           <option value={0.0035}>0.35% (recommended)</option>
@@ -345,6 +361,10 @@ export default function SimplePredict() {
       const headline = data.direction === "UP" ? "📈 Likely UP" : "📉 Likely DOWN";
       const explanation = explainA(data.direction, data.prob_up);
 
+      const auc = metricNumber(data.model_metrics, "auc_mean", 0);
+      const prauc = metricNumber(data.model_metrics, "prauc_mean", 0);
+      const baseline = metricNumber(data.model_metrics, "prauc_baseline", 0);
+
       return (
         <div
           style={{
@@ -398,9 +418,7 @@ export default function SimplePredict() {
             <div style={{ marginTop: 12 }}>
               <div style={{ fontWeight: 800 }}>Model metrics</div>
               <div style={{ marginTop: 6, fontSize: 13, opacity: 0.9 }}>
-                AUC: {(data.model_metrics?.auc_mean ?? 0).toFixed(3)} • PR-AUC:{" "}
-                {(data.model_metrics?.prauc_mean ?? 0).toFixed(3)} • Baseline:{" "}
-                {(data.model_metrics?.prauc_baseline ?? 0).toFixed(3)}
+                AUC: {auc.toFixed(3)} • PR-AUC: {prauc.toFixed(3)} • Baseline: {baseline.toFixed(3)}
               </div>
               <pre style={detailsPreStyle}>{JSON.stringify(data, null, 2)}</pre>
             </div>
@@ -412,6 +430,11 @@ export default function SimplePredict() {
     const conf = confidenceLabel(data.confidence);
     const headline = data.signal === "STRONG_UP" ? "🚀 Strong UP signal" : "🟡 No strong signal";
     const explanation = explainD(data.signal, data.prob_strong_up, data.thr);
+
+    const auc = metricNumber(data.model_metrics, "auc_mean", 0);
+    const prauc = metricNumber(data.model_metrics, "prauc_mean", 0);
+    const baseline = metricNumber(data.model_metrics, "prauc_baseline", 0);
+    const posRate = metricNumber(data.model_metrics, "positive_rate", 0);
 
     return (
       <div
@@ -466,10 +489,8 @@ export default function SimplePredict() {
           <div style={{ marginTop: 12 }}>
             <div style={{ fontWeight: 800 }}>Model metrics</div>
             <div style={{ marginTop: 6, fontSize: 13, opacity: 0.9 }}>
-              AUC: {(data.model_metrics?.auc_mean ?? 0).toFixed(3)} • PR-AUC:{" "}
-              {(data.model_metrics?.prauc_mean ?? 0).toFixed(3)} • Baseline:{" "}
-              {(data.model_metrics?.prauc_baseline ?? 0).toFixed(3)} • Pos rate:{" "}
-              {(data.model_metrics?.positive_rate ?? 0).toFixed(3)}
+              AUC: {auc.toFixed(3)} • PR-AUC: {prauc.toFixed(3)} • Baseline: {baseline.toFixed(3)} • Pos rate:{" "}
+              {posRate.toFixed(3)}
             </div>
             <pre style={detailsPreStyle}>{JSON.stringify(data, null, 2)}</pre>
           </div>
