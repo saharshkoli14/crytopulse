@@ -28,14 +28,21 @@ function toNum(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-export async function GET(req: NextRequest, ctx: { params: { symbol: string } }) {
+type Ctx = {
+  params: Promise<{ symbol: string }>;
+};
+
+export async function GET(req: NextRequest, ctx: Ctx) {
   try {
     mustEnv("DATABASE_URL", process.env.DATABASE_URL);
 
-    const symbol = ctx.params.symbol;
+    const { symbol } = await ctx.params;
     const url = new URL(req.url);
 
-    const limit = Math.min(3000, Math.max(10, Number(url.searchParams.get("limit") ?? "1440")));
+    const limit = Math.min(
+      3000,
+      Math.max(10, Number(url.searchParams.get("limit") ?? "1440"))
+    );
 
     // --- Latest candle
     const qLatest = `
