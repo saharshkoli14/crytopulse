@@ -27,28 +27,22 @@ function fmtPct(x: number | null | undefined) {
   return `${s}${v.toFixed(2)}%`;
 }
 
-function getBaseUrl() {
-  // ✅ Option A: match your Vercel env var name exactly
-  const fromEnv = process.env.NEXT_PUBLIC_BASE_URL;
+function getOrigin() {
+  // ✅ If you set NEXT_PUBLIC_BASE_URL on Vercel, it will use it
+  const envBase = process.env.NEXT_PUBLIC_BASE_URL;
+  if (envBase && envBase.trim()) return envBase.replace(/\/+$/, "");
 
-  if (fromEnv && fromEnv.trim().length > 0) {
-    // remove trailing slash if present
-    return fromEnv.replace(/\/+$/, "");
-  }
+  // ✅ Vercel provides VERCEL_URL (no protocol)
+  if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`;
 
-  // Fallback for Vercel if NEXT_PUBLIC_BASE_URL isn't set
-  if (process.env.VERCEL_URL) {
-    return `https://${process.env.VERCEL_URL}`;
-  }
-
-  // Local dev fallback
+  // ✅ Local dev
   return "http://localhost:3000";
 }
 
 export default async function HomePage() {
-  const baseUrl = getBaseUrl();
+  const origin = getOrigin();
 
-  const res = await fetch(`${baseUrl}/api/overview`, {
+  const res = await fetch(`${origin}/api/overview`, {
     cache: "no-store",
   });
 
@@ -72,7 +66,6 @@ export default async function HomePage() {
 
   const data: OverviewResponse = await res.json();
 
-  // remove BTCUSDT
   const symbols = (data.symbols ?? []).filter(
     (r) => String(r.symbol).trim().toUpperCase() !== "BTCUSDT"
   );
@@ -100,7 +93,8 @@ export default async function HomePage() {
               href="/prediction"
               className="btn"
               style={{
-                boxShadow: "0 0 0 1px rgba(99,102,241,0.35), 0 12px 30px rgba(99,102,241,0.12)",
+                boxShadow:
+                  "0 0 0 1px rgba(99,102,241,0.35), 0 12px 30px rgba(99,102,241,0.12)",
               }}
             >
               🔮 Get a Prediction
@@ -115,7 +109,6 @@ export default async function HomePage() {
         </div>
       </header>
 
-      {/* Cards */}
       <section
         style={{
           display: "grid",
@@ -182,60 +175,6 @@ export default async function HomePage() {
             </div>
           </div>
         ))}
-      </section>
-
-      {/* Table */}
-      <section style={{ marginTop: 22 }}>
-        <h3 style={{ marginBottom: 10, fontSize: 22 }}>All symbols</h3>
-        <div className="glass" style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-            <thead>
-              <tr style={{ textAlign: "left" }}>
-                <th style={{ padding: 12, borderBottom: "1px solid rgba(255,255,255,0.10)" }}>
-                  Symbol
-                </th>
-                <th style={{ padding: 12, borderBottom: "1px solid rgba(255,255,255,0.10)" }}>
-                  Latest
-                </th>
-                <th style={{ padding: 12, borderBottom: "1px solid rgba(255,255,255,0.10)" }}>
-                  24h %
-                </th>
-                <th style={{ padding: 12, borderBottom: "1px solid rgba(255,255,255,0.10)" }}>
-                  24h volume
-                </th>
-                <th style={{ padding: 12, borderBottom: "1px solid rgba(255,255,255,0.10)" }}>
-                  Last candle
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {symbols.map((r) => (
-                <tr key={r.symbol}>
-                  <td style={{ padding: 12, borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-                    <Link
-                      href={`/symbol/${encodeURIComponent(r.symbol)}`}
-                      style={{ textDecoration: "underline" }}
-                    >
-                      {r.symbol}
-                    </Link>
-                  </td>
-                  <td style={{ padding: 12, borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-                    {fmtNum(r.latest_close)}
-                  </td>
-                  <td style={{ padding: 12, borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-                    {fmtPct(r.pct_change_24h)}
-                  </td>
-                  <td style={{ padding: 12, borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-                    {fmtNum(r.volume_24h)}
-                  </td>
-                  <td style={{ padding: 12, borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-                    {new Date(r.latest_bucket).toLocaleString()}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
       </section>
     </main>
   );
