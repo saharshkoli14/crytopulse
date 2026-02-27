@@ -28,10 +28,21 @@ function fmtPct(x: number | null | undefined) {
 }
 
 function getBaseUrl() {
-  return (
-    process.env.NEXT_PUBLIC_BASE_URL ??
-    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000")
-  );
+  // ✅ Option A: match your Vercel env var name exactly
+  const fromEnv = process.env.NEXT_PUBLIC_BASE_URL;
+
+  if (fromEnv && fromEnv.trim().length > 0) {
+    // remove trailing slash if present
+    return fromEnv.replace(/\/+$/, "");
+  }
+
+  // Fallback for Vercel if NEXT_PUBLIC_BASE_URL isn't set
+  if (process.env.VERCEL_URL) {
+    return `https://${process.env.VERCEL_URL}`;
+  }
+
+  // Local dev fallback
+  return "http://localhost:3000";
 }
 
 export default async function HomePage() {
@@ -89,8 +100,7 @@ export default async function HomePage() {
               href="/prediction"
               className="btn"
               style={{
-                boxShadow:
-                  "0 0 0 1px rgba(99,102,241,0.35), 0 12px 30px rgba(99,102,241,0.12)",
+                boxShadow: "0 0 0 1px rgba(99,102,241,0.35), 0 12px 30px rgba(99,102,241,0.12)",
               }}
             >
               🔮 Get a Prediction
@@ -202,7 +212,10 @@ export default async function HomePage() {
               {symbols.map((r) => (
                 <tr key={r.symbol}>
                   <td style={{ padding: 12, borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-                    <Link href={`/symbol/${encodeURIComponent(r.symbol)}`} style={{ textDecoration: "underline" }}>
+                    <Link
+                      href={`/symbol/${encodeURIComponent(r.symbol)}`}
+                      style={{ textDecoration: "underline" }}
+                    >
                       {r.symbol}
                     </Link>
                   </td>
