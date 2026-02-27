@@ -27,17 +27,22 @@ function fmtPct(x: number | null | undefined) {
   return `${s}${v.toFixed(2)}%`;
 }
 
-function getBaseUrl() {
-  return (
-    process.env.NEXT_PUBLIC_BASE_URL ??
-    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000")
-  );
+function getOrigin() {
+  // ✅ If you set NEXT_PUBLIC_BASE_URL on Vercel, it will use it
+  const envBase = process.env.NEXT_PUBLIC_BASE_URL;
+  if (envBase && envBase.trim()) return envBase.replace(/\/+$/, "");
+
+  // ✅ Vercel provides VERCEL_URL (no protocol)
+  if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`;
+
+  // ✅ Local dev
+  return "http://localhost:3000";
 }
 
 export default async function HomePage() {
-  const baseUrl = getBaseUrl();
+  const origin = getOrigin();
 
-  const res = await fetch(`${baseUrl}/api/overview`, {
+  const res = await fetch(`${origin}/api/overview`, {
     cache: "no-store",
   });
 
@@ -61,7 +66,6 @@ export default async function HomePage() {
 
   const data: OverviewResponse = await res.json();
 
-  // remove BTCUSDT
   const symbols = (data.symbols ?? []).filter(
     (r) => String(r.symbol).trim().toUpperCase() !== "BTCUSDT"
   );
@@ -105,7 +109,6 @@ export default async function HomePage() {
         </div>
       </header>
 
-      {/* Cards */}
       <section
         style={{
           display: "grid",
@@ -172,57 +175,6 @@ export default async function HomePage() {
             </div>
           </div>
         ))}
-      </section>
-
-      {/* Table */}
-      <section style={{ marginTop: 22 }}>
-        <h3 style={{ marginBottom: 10, fontSize: 22 }}>All symbols</h3>
-        <div className="glass" style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-            <thead>
-              <tr style={{ textAlign: "left" }}>
-                <th style={{ padding: 12, borderBottom: "1px solid rgba(255,255,255,0.10)" }}>
-                  Symbol
-                </th>
-                <th style={{ padding: 12, borderBottom: "1px solid rgba(255,255,255,0.10)" }}>
-                  Latest
-                </th>
-                <th style={{ padding: 12, borderBottom: "1px solid rgba(255,255,255,0.10)" }}>
-                  24h %
-                </th>
-                <th style={{ padding: 12, borderBottom: "1px solid rgba(255,255,255,0.10)" }}>
-                  24h volume
-                </th>
-                <th style={{ padding: 12, borderBottom: "1px solid rgba(255,255,255,0.10)" }}>
-                  Last candle
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {symbols.map((r) => (
-                <tr key={r.symbol}>
-                  <td style={{ padding: 12, borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-                    <Link href={`/symbol/${encodeURIComponent(r.symbol)}`} style={{ textDecoration: "underline" }}>
-                      {r.symbol}
-                    </Link>
-                  </td>
-                  <td style={{ padding: 12, borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-                    {fmtNum(r.latest_close)}
-                  </td>
-                  <td style={{ padding: 12, borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-                    {fmtPct(r.pct_change_24h)}
-                  </td>
-                  <td style={{ padding: 12, borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-                    {fmtNum(r.volume_24h)}
-                  </td>
-                  <td style={{ padding: 12, borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-                    {new Date(r.latest_bucket).toLocaleString()}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
       </section>
     </main>
   );
