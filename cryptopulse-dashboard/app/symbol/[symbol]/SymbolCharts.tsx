@@ -56,40 +56,43 @@ const tooltipLabelStyle: React.CSSProperties = {
   color: "rgba(255,255,255,0.85)",
 };
 
-// Recharts Tooltip formatter signature (strict)
-type TooltipFormatter = (
-  value: ValueType | undefined,
-  name: string,
-  item: Payload<ValueType, string>,
-  index: number,
-  payload: Array<Payload<ValueType, string>>
-) => React.ReactNode | [React.ReactNode, string];
+function tooltipValueFormatter(value?: ValueType, name?: NameType): [string, string] {
+  const label = typeof name === "string" ? name : String(name ?? "");
+  if (value === null || value === undefined) return ["—", label];
 
-function toNumber(v: ValueType | undefined): number | null {
-  if (v === null || v === undefined) return null;
-  if (typeof v === "number") return Number.isFinite(v) ? v : null;
-  if (typeof v === "string") {
-    const n = Number(v);
-    return Number.isFinite(n) ? n : null;
-  }
-  return null;
+  const num =
+    typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+
+  const pretty = Number.isFinite(num) ? fmtNum(num, 2) : "—";
+  return [pretty, label];
 }
 
-const tooltipValueFormatter: TooltipFormatter = (value, name) => {
-  const n = toNumber(value);
-  const pretty = n === null ? "—" : fmtNum(n, 2);
-  return [pretty, name];
-};
+function tooltipVolumeFormatter(value?: ValueType, name?: NameType): [string, string] {
+  const label = typeof name === "string" ? name : String(name ?? "");
+  if (value === null || value === undefined) return ["—", label];
 
-const tooltipVolumeFormatter: TooltipFormatter = (value, name) => {
-  const n = toNumber(value);
-  const pretty =
-    n === null ? "—" : Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(n);
-  return [pretty, name];
+  const num =
+    typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+
+  const pretty = Number.isFinite(num)
+    ? Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(num)
+    : "—";
+
+  return [pretty, label];
+}
+
+// ✅ Correct typing for Recharts labelFormatter
+type TooltipLabelFormatter = (
+  label: React.ReactNode,
+  payload: readonly Payload<ValueType, string>[]
+) => React.ReactNode;
+
+const labelFormatter: TooltipLabelFormatter = (label) => {
+  const d = new Date(String(label));
+  return Number.isNaN(d.getTime()) ? String(label) : d.toLocaleString();
 };
 
 export default function SymbolCharts({ points }: { points: Point[] }) {
-  // Keep charts smooth by downsampling if you have 1440 points
   const step = points.length > 600 ? Math.ceil(points.length / 600) : 1;
   const data = points.filter((_, i) => i % step === 0);
 
@@ -125,7 +128,7 @@ export default function SymbolCharts({ points }: { points: Point[] }) {
               <Tooltip
                 contentStyle={tooltipContentStyle}
                 labelStyle={tooltipLabelStyle}
-                labelFormatter={(l: NameType) => new Date(String(l)).toLocaleString()}
+                labelFormatter={labelFormatter}
                 formatter={tooltipValueFormatter}
               />
 
@@ -171,7 +174,7 @@ export default function SymbolCharts({ points }: { points: Point[] }) {
               <Tooltip
                 contentStyle={tooltipContentStyle}
                 labelStyle={tooltipLabelStyle}
-                labelFormatter={(l: NameType) => new Date(String(l)).toLocaleString()}
+                labelFormatter={labelFormatter}
                 formatter={tooltipVolumeFormatter}
               />
 
