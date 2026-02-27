@@ -1,92 +1,158 @@
-import { NextResponse } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
 import { Pool } from "pg";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+const TABLE = "public.ohlcv_1m";
+const COL_SYMBOL = "symbol";
+const COL_BUCKET = "bucket";
+const COL_CLOSE = "close";
+const COL_HIGH = "high";
+const COL_LOW = "low";
+const COL_VOLUME = "volume";
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false },
 });
 
-type Row = {
-  bucket: string;
-  open: string | number | null;
-  high: string | number | null;
-  low: string | number | null;
-  close: string | number | null;
-  volume: string | number | null;
+function mustEnv(name: string, v: string | undefined) {
+  if (!v) throw new Error(`Missing env ${name}`);
+  return v;
+}
+
+function toNum(v: unknown): number | null {
+  if (v === null || v === undefined) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+type Ctx = {
+  params: Promise<{ symbol: string }>;
 };
 
-const toNum = (v: any) => (v == null ? null : Number(v));
-
-export async function GET(request: Request) {
-  const { pathname } = new URL(request.url);
-  const symbol = decodeURIComponent(pathname.split("/").pop() || "");
-
-  let client: any;
+export async function GET(req: NextRequest, ctx: Ctx) {
   try {
-    client = await pool.connect();
+    mustEnv("DATABASE_URL", process.env.DATABASE_URL);
 
-    // ✅ correct table name (from your screenshot)
-    const candles = await client.query<Row>(
-      `
-      SELECT bucket, open, high, low, close, volume
-      FROM public.ohlcv_1m
-      WHERE symbol = $1
-      ORDER BY bucket DESC
-      LIMIT 1440
-      `,
-      [symbol]
+    const { symbol } = await ctx.params;
+    const url = new URL(req.url);
+
+    const limit = Math.min(
+      3000,
+      Math.max(10, Number(url.searchParams.get("limit") ?? "1440"))
     );
 
-    const points = candles.rows
+    // --- Latest candle
+    const qLatest = `
+      SELECT ${COL_BUCKET} AS bucket, ${COL_CLOSE} AS close
+      FROM ${TABLE}
+      WHERE ${COL_SYMBOL} = $1
+      ORDER BY ${COL_BUCKET} DESC
+      LIMIT 1
+    `;
+    const latestRes = await pool.query<{ bucket: string; close: unknown }>(qLatest, [symbol]);
+    const latestRow = latestRes.rows?.[0];
+    const latestBucket = latestRow?.bucket ?? null;
+    const latestClose = toNum(latestRow?.close);
+
+    if (!latestBucket || latestClose === null) {
+      return NextResponse.json(
+        { ok: false, error: `No data found for symbol ${symbol}` },
+        { status: 404 }
+      );
+    }
+
+    // --- 24h stats
+    const q24h = `
+      WITH w AS (
+        SELECT
+          ${COL_BUCKET} AS bucket,
+          ${COL_CLOSE}  AS close,
+          ${COL_HIGH}   AS high,
+          ${COL_LOW}    AS low,
+          ${COL_VOLUME} AS volume
+        FROM ${TABLE}
+        WHERE ${COL_SYMBOL} = $1
+          AND ${COL_BUCKET} >= now() - interval '24 hours'
+        ORDER BY ${COL_BUCKET} ASC
+      )
+      SELECT
+        (array_agg(close ORDER BY bucket ASC))[1] AS close_24h_ago,
+        MAX(high) AS high_24h,
+        MIN(low)  AS low_24h,
+        SUM(volume) AS volume_24h
+      FROM w;
+    `;
+    const s24 = await pool.query<{
+      close_24h_ago: unknown;
+      high_24h: unknown;
+      low_24h: unknown;
+      volume_24h: unknown;
+    }>(q24h, [symbol]);
+
+    const row24 = s24.rows?.[0];
+    const close24hAgo = toNum(row24?.close_24h_ago);
+    const high24h = toNum(row24?.high_24h);
+    const low24h = toNum(row24?.low_24h);
+    const volume24h = toNum(row24?.volume_24h);
+
+    const pctChange24h =
+      latestClose !== null && close24hAgo !== null && close24hAgo !== 0
+        ? (latestClose - close24hAgo) / close24hAgo
+        : null;
+
+    // --- Series for charts
+    const qSeries = `
+      SELECT ${COL_BUCKET} AS bucket,
+             ${COL_CLOSE}  AS close,
+             ${COL_VOLUME} AS volume
+      FROM ${TABLE}
+      WHERE ${COL_SYMBOL} = $1
+      ORDER BY ${COL_BUCKET} DESC
+      LIMIT $2
+    `;
+    const seriesRes = await pool.query<{ bucket: string; close: unknown; volume: unknown }>(
+      qSeries,
+      [symbol, limit]
+    );
+
+    const seriesDesc = seriesRes.rows ?? [];
+    const points = seriesDesc
+      .slice()
       .reverse()
       .map((r) => ({
         bucket: r.bucket,
-        open: toNum(r.open),
-        high: toNum(r.high),
-        low: toNum(r.low),
         close: toNum(r.close),
         volume: toNum(r.volume),
       }));
 
-    if (points.length === 0) {
-      return NextResponse.json({ error: `No data for symbol: ${symbol}` }, { status: 404 });
-    }
-
-    const closes = points.map((p) => p.close).filter((x): x is number => x != null);
-    const vols = points.map((p) => p.volume).filter((x): x is number => x != null);
-
-    const latest = points[points.length - 1];
-    const first = points[0];
-
-    const latestClose = latest.close ?? null;
-    const firstClose = first.close ?? null;
-
-    const pct24h =
-      latestClose != null && firstClose != null && firstClose !== 0
-        ? (latestClose - firstClose) / firstClose
-        : null;
-
-    return NextResponse.json({
-      updated_at: new Date().toISOString(),
-      symbol,
-      range: "24h",
-      points,
-      stats: {
-        latest_bucket: latest.bucket,
+    return NextResponse.json(
+      {
+        ok: true,
+        symbol,
+        updatedAt: new Date().toISOString(),
+        stats: {
+          latestBucket,
+          latestClose,
+          close24hAgo,
+          pctChange24h,
+          high24h,
+          low24h,
+          volume24h,
+        },
+        points,
+        series: points,
+        // backwards compatibility
+        latest_bucket: latestBucket,
         latest_close: latestClose,
-        pct_change_24h: pct24h,
-        high_24h: closes.length ? Math.max(...closes) : null,
-        low_24h: closes.length ? Math.min(...closes) : null,
-        volume_24h: vols.length ? vols.reduce((a, b) => a + b, 0) : null,
+        rows: seriesDesc,
       },
-    });
-  } catch (error) {
-    console.error("Symbol API error:", error);
-    return NextResponse.json({ error: "Failed to load symbol data" }, { status: 500 });
-  } finally {
-    client?.release();
+      { status: 200 }
+    );
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : "Unexpected error";
+    return NextResponse.json({ ok: false, error: msg }, { status: 500 });
   }
 }

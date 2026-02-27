@@ -1,4 +1,5 @@
-import { Pool } from "pg";
+import { NextResponse } from "next/server";
+import { Pool, type PoolClient } from "pg";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -24,10 +25,14 @@ type SeriesRow = {
   total_volume: string | number | null;
 };
 
-const toNum = (v: any) => (v == null ? null : Number(v));
+function toNum(v: unknown): number | null {
+  if (v === null || v === undefined) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
 
 export async function GET() {
-  let client: any;
+  let client: PoolClient | null = null;
 
   try {
     client = await pool.connect();
@@ -70,7 +75,8 @@ export async function GET() {
       ORDER BY l.symbol;
     `;
 
-    const { rows: symbolRowsRaw } = await client.query<SymbolRow>(qSymbols);
+    const symbolRes = await client.query<SymbolRow>(qSymbols);
+    const symbolRowsRaw = symbolRes.rows;
 
     const symbols = (symbolRowsRaw ?? []).map((r) => ({
       symbol: r.symbol,
@@ -83,8 +89,6 @@ export async function GET() {
     }));
 
     // --- Market-wide series (last 24h, 1m)
-    // market_index: average normalized price across symbols (base=100 at first point per symbol in window)
-    // total_volume: sum volume across symbols per minute
     const qSeries = `
       WITH w AS (
         SELECT
@@ -106,7 +110,8 @@ export async function GET() {
       ORDER BY bucket ASC;
     `;
 
-    const { rows: seriesRowsRaw } = await client.query<SeriesRow>(qSeries);
+    const seriesRes = await client.query<SeriesRow>(qSeries);
+    const seriesRowsRaw = seriesRes.rows;
 
     const series = (seriesRowsRaw ?? []).map((r) => ({
       bucket: r.bucket,
@@ -114,7 +119,7 @@ export async function GET() {
       total_volume: toNum(r.total_volume),
     }));
 
-    // --- Aggregate stats (computed in JS for clarity)
+    // --- Aggregate stats (computed in JS)
     const pctVals = symbols
       .map((s) => s.pct_change_24h)
       .filter((x): x is number => typeof x === "number");
@@ -133,18 +138,23 @@ export async function GET() {
       decliners,
       unchanged,
       total_volume_24h: volumeVals.reduce((a, b) => a + b, 0),
-      avg_pct_change_24h: pctVals.length ? pctVals.reduce((a, b) => a + b, 0) / pctVals.length : null,
+      avg_pct_change_24h: pctVals.length
+        ? pctVals.reduce((a, b) => a + b, 0) / pctVals.length
+        : null,
     };
 
-    return Response.json({
+    return NextResponse.json({
       updated_at: new Date().toISOString(),
       symbols,
       aggregate,
       series,
     });
-  } catch (err) {
+  } catch (err: unknown) {
     console.error("Overview API error:", err);
-    return Response.json({ error: "Failed to load overview data" }, { status: 500 });
+    return NextResponse.json(
+      { error: "Failed to load overview data" },
+      { status: 500 }
+    );
   } finally {
     client?.release();
   }

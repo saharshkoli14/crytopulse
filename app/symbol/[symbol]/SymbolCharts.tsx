@@ -12,6 +12,11 @@ import {
   BarChart,
   Bar,
 } from "recharts";
+import type {
+  NameType,
+  ValueType,
+  Payload,
+} from "recharts/types/component/DefaultTooltipContent";
 
 type Point = {
   bucket: string;
@@ -28,7 +33,8 @@ function toLocalTimeLabel(iso: string) {
   return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-function fmtNum(x: any, maxFrac = 2) {
+function fmtNum(x: unknown, maxFrac = 2) {
+  if (x === null || x === undefined) return "—";
   const n = typeof x === "number" ? x : Number(x);
   if (!Number.isFinite(n)) return "—";
   return Intl.NumberFormat("en-US", { maximumFractionDigits: maxFrac }).format(n);
@@ -50,8 +56,43 @@ const tooltipLabelStyle: React.CSSProperties = {
   color: "rgba(255,255,255,0.85)",
 };
 
+function tooltipValueFormatter(value?: ValueType, name?: NameType): [string, string] {
+  const label = typeof name === "string" ? name : String(name ?? "");
+  if (value === null || value === undefined) return ["—", label];
+
+  const num =
+    typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+
+  const pretty = Number.isFinite(num) ? fmtNum(num, 2) : "—";
+  return [pretty, label];
+}
+
+function tooltipVolumeFormatter(value?: ValueType, name?: NameType): [string, string] {
+  const label = typeof name === "string" ? name : String(name ?? "");
+  if (value === null || value === undefined) return ["—", label];
+
+  const num =
+    typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+
+  const pretty = Number.isFinite(num)
+    ? Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(num)
+    : "—";
+
+  return [pretty, label];
+}
+
+// ✅ Correct typing for Recharts labelFormatter
+type TooltipLabelFormatter = (
+  label: React.ReactNode,
+  payload: readonly Payload<ValueType, string>[]
+) => React.ReactNode;
+
+const labelFormatter: TooltipLabelFormatter = (label) => {
+  const d = new Date(String(label));
+  return Number.isNaN(d.getTime()) ? String(label) : d.toLocaleString();
+};
+
 export default function SymbolCharts({ points }: { points: Point[] }) {
-  // Keep charts smooth by downsampling if you have 1440 points
   const step = points.length > 600 ? Math.ceil(points.length / 600) : 1;
   const data = points.filter((_, i) => i % step === 0);
 
@@ -87,15 +128,15 @@ export default function SymbolCharts({ points }: { points: Point[] }) {
               <Tooltip
                 contentStyle={tooltipContentStyle}
                 labelStyle={tooltipLabelStyle}
-                labelFormatter={(l) => new Date(l).toLocaleString()}
-                formatter={(value: any) => [fmtNum(value, 2), "Close"]}
+                labelFormatter={labelFormatter}
+                formatter={tooltipValueFormatter}
               />
 
               <Line
                 type="monotone"
                 dataKey="close"
                 dot={false}
-                stroke="rgba(96,165,250,0.95)" // visible blue on dark bg
+                stroke="rgba(96,165,250,0.95)"
                 strokeWidth={2.25}
                 isAnimationActive={false}
               />
@@ -133,15 +174,11 @@ export default function SymbolCharts({ points }: { points: Point[] }) {
               <Tooltip
                 contentStyle={tooltipContentStyle}
                 labelStyle={tooltipLabelStyle}
-                labelFormatter={(l) => new Date(l).toLocaleString()}
-                formatter={(value: any) => [fmtNum(value, 0), "Volume"]}
+                labelFormatter={labelFormatter}
+                formatter={tooltipVolumeFormatter}
               />
 
-              <Bar
-                dataKey="volume"
-                isAnimationActive={false}
-                fill="rgba(99,102,241,0.65)" // visible purple bars
-              />
+              <Bar dataKey="volume" isAnimationActive={false} fill="rgba(99,102,241,0.65)" />
             </BarChart>
           </ResponsiveContainer>
         </div>

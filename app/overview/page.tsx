@@ -1,30 +1,36 @@
 import Link from "next/link";
-import { headers } from "next/headers";
+import { Pool, type PoolClient } from "pg";
 import OverviewCharts from "./OverviewCharts";
 
-type OverviewRow = {
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false },
+});
+
+type SymbolRow = {
   symbol: string;
   latest_bucket: string;
-  latest_close: number | null;
-  close_24h_ago: number | null;
-  pct_change_24h: number | null;
-  volume_24h: number | null;
-  price_std_24h: number | null;
+  latest_close: string | number | null;
+  close_24h_ago: string | number | null;
+  pct_change_24h: string | number | null;
+  volume_24h: string | number | null;
+  price_std_24h: string | number | null;
 };
 
-type OverviewResponse = {
-  updated_at: string;
-  symbols: OverviewRow[];
-  aggregate: {
-    symbol_count: number;
-    advancers: number;
-    decliners: number;
-    unchanged: number;
-    total_volume_24h: number | null;
-    avg_pct_change_24h: number | null;
-  };
-  series: { bucket: string; market_index: number | null; total_volume: number | null }[];
+type SeriesRow = {
+  bucket: string;
+  market_index: string | number | null;
+  total_volume: string | number | null;
 };
+
+function toNum(v: unknown): number | null {
+  if (v === null || v === undefined) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
 
 function fmtNum(x: number | null | undefined) {
   if (x === null || x === undefined) return "—";
@@ -39,128 +45,171 @@ function fmtPct(x: number | null | undefined) {
 }
 
 export default async function OverviewPage() {
-  const h = headers();
-  const host = h.get("host");
-  const proto = h.get("x-forwarded-proto") ?? "http";
+  let client: PoolClient | null = null;
 
-  const res = await fetch(`${proto}://${host}/api/overview`, { cache: "no-store" });
+  try {
+    if (!process.env.DATABASE_URL) {
+      return (
+        <main style={{ padding: 24, fontFamily: "system-ui" }}>
+          <h1>CryptoPulse</h1>
+          <p style={{ color: "crimson" }}>DATABASE_URL not configured</p>
+        </main>
+      );
+    }
 
-  if (!res.ok) {
+    client = await pool.connect();
+
+    // ---- SYMBOL OVERVIEW QUERY ----
+    const qSymbols = `
+      WITH latest AS (
+        SELECT DISTINCT ON (symbol)
+          symbol,
+          bucket AS latest_bucket,
+          close  AS latest_close
+        FROM public.ohlcv_1m
+        WHERE symbol <> 'BTCUSDT'   -- ✅ EXCLUDE HERE
+        ORDER BY symbol, bucket DESC
+      ),
+      window_24h AS (
+        SELECT
+          symbol,
+          (array_agg(close ORDER BY bucket ASC))[1]  AS close_24h_ago,
+          SUM(volume) AS volume_24h,
+          STDDEV_SAMP(close) AS price_std_24h
+        FROM public.ohlcv_1m
+        WHERE bucket >= now() - interval '24 hours'
+          AND symbol <> 'BTCUSDT'   -- ✅ EXCLUDE HERE
+        GROUP BY symbol
+      )
+      SELECT
+        l.symbol,
+        l.latest_bucket,
+        l.latest_close,
+        w.close_24h_ago,
+        CASE
+          WHEN w.close_24h_ago IS NULL OR w.close_24h_ago = 0 THEN NULL
+          ELSE (l.latest_close - w.close_24h_ago) / w.close_24h_ago
+        END AS pct_change_24h,
+        w.volume_24h,
+        w.price_std_24h
+      FROM latest l
+      LEFT JOIN window_24h w USING (symbol)
+      ORDER BY l.symbol;
+  `;
+
+    const symbolRes = await client.query<SymbolRow>(qSymbols);
+
+    const symbols = (symbolRes.rows ?? []).map((r) => ({
+      symbol: r.symbol,
+      latest_bucket: r.latest_bucket,
+      latest_close: toNum(r.latest_close),
+      close_24h_ago: toNum(r.close_24h_ago),
+      pct_change_24h: toNum(r.pct_change_24h),
+      volume_24h: toNum(r.volume_24h),
+      price_std_24h: toNum(r.price_std_24h),
+    }));
+
+    // ---- MARKET INDEX SERIES ----
+    const qSeries = `
+      WITH w AS (
+        SELECT
+          symbol,
+          bucket,
+          close,
+          volume,
+          FIRST_VALUE(close) OVER (PARTITION BY symbol ORDER BY bucket ASC) AS first_close
+        FROM public.ohlcv_1m
+        WHERE bucket >= now() - interval '24 hours'
+          AND symbol <> 'BTCUSDT'   -- ✅ EXCLUDE HERE
+      )
+      SELECT
+        bucket,
+        AVG((close / NULLIF(first_close, 0)) * 100.0) AS market_index,
+        SUM(volume) AS total_volume
+      FROM w
+      GROUP BY bucket
+      ORDER BY bucket ASC;
+  `;
+
+    const seriesRes = await client.query<SeriesRow>(qSeries);
+
+    const series = (seriesRes.rows ?? []).map((r) => ({
+      bucket: r.bucket,
+      market_index: toNum(r.market_index),
+      total_volume: toNum(r.total_volume),
+    }));
+
     return (
-      <main style={{ padding: 24, fontFamily: "system-ui" }}>
-        <h1>Overview</h1>
-        <p>Failed to load overview. Status: {res.status}</p>
-        <Link href="/" style={{ textDecoration: "underline" }}>
-          ← Back to Home
-        </Link>
-      </main>
-    );
-  }
+      <main style={{ padding: 24, maxWidth: 1200, margin: "0 auto", fontFamily: "system-ui" }}>
+        <h1 style={{ marginBottom: 8 }}>CryptoPulse</h1>
+        <p style={{ opacity: 0.7 }}>
+          Overview of tracked crypto pairs • Updated {new Date().toLocaleString()}
+        </p>
 
-  const data: OverviewResponse = await res.json();
+        {/* ---- TOP CARDS ---- */}
+        <div style={{ display: "flex", gap: 16, marginTop: 24, flexWrap: "wrap" }}>
+          {symbols.slice(0, 3).map((s) => (
+            <div
+              key={s.symbol}
+              style={{
+                border: "1px solid #333",
+                borderRadius: 16,
+                padding: 20,
+                width: 320,
+              }}
+            >
+              <h3 style={{ margin: 0 }}>{s.symbol}</h3>
+              <div style={{ fontSize: 28, fontWeight: 700, marginTop: 8 }}>
+                {fmtNum(s.latest_close)}
+              </div>
+              <div style={{ marginTop: 8 }}>24h change: {fmtPct(s.pct_change_24h)}</div>
+              <div>24h volume: {fmtNum(s.volume_24h)}</div>
+              <div>24h stdev: {fmtNum(s.price_std_24h)}</div>
 
-  // Extra safety
-  const symbols = (data.symbols ?? []).filter(
-    (s) => String(s.symbol).trim().toUpperCase() !== "BTCUSDT"
-  );
-
-  const a = data.aggregate;
-
-  return (
-    <main style={{ padding: 24, fontFamily: "system-ui", maxWidth: 1100, margin: "0 auto" }}>
-      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-        <div>
-          <h1 style={{ margin: 0 }}>Overview</h1>
-          <p style={{ marginTop: 6, opacity: 0.8 }}>
-            Updated: {new Date(data.updated_at).toLocaleString()}
-          </p>
-        </div>
-        <Link href="/" style={{ textDecoration: "underline" }}>
-          ← Back to Home
-        </Link>
-      </header>
-
-      {/* Summary cards */}
-      <section
-        style={{
-          marginTop: 14,
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-          gap: 12,
-        }}
-      >
-        <div style={{ border: "1px solid #333", borderRadius: 12, padding: 14 }}>
-          <div style={{ opacity: 0.7, fontSize: 12 }}>Tracked symbols</div>
-          <div style={{ fontSize: 24, fontWeight: 700 }}>{a?.symbol_count ?? symbols.length}</div>
+              <Link href={`/symbol/${encodeURIComponent(s.symbol)}`}>
+                <button style={{ marginTop: 12 }}>View details →</button>
+              </Link>
+            </div>
+          ))}
         </div>
 
-        <div style={{ border: "1px solid #333", borderRadius: 12, padding: 14 }}>
-          <div style={{ opacity: 0.7, fontSize: 12 }}>Advancers / Decliners</div>
-          <div style={{ fontSize: 18, fontWeight: 700 }}>
-            {a?.advancers ?? "—"} / {a?.decliners ?? "—"}
-          </div>
-          <div style={{ opacity: 0.7, fontSize: 12, marginTop: 6 }}>
-            Unchanged: {a?.unchanged ?? "—"}
-          </div>
-        </div>
+        {/* ---- TABLE ---- */}
+        <h2 style={{ marginTop: 40 }}>All symbols</h2>
 
-        <div style={{ border: "1px solid #333", borderRadius: 12, padding: 14 }}>
-          <div style={{ opacity: 0.7, fontSize: 12 }}>Total volume (24h)</div>
-          <div style={{ fontSize: 24, fontWeight: 700 }}>{fmtNum(a?.total_volume_24h)}</div>
-        </div>
-
-        <div style={{ border: "1px solid #333", borderRadius: 12, padding: 14 }}>
-          <div style={{ opacity: 0.7, fontSize: 12 }}>Avg % change (24h)</div>
-          <div style={{ fontSize: 24, fontWeight: 700 }}>{fmtPct(a?.avg_pct_change_24h)}</div>
-        </div>
-      </section>
-
-      {/* Charts */}
-      <OverviewCharts series={data.series ?? []} />
-
-      {/* Symbols table */}
-      <section style={{ marginTop: 18 }}>
-        <h3 style={{ marginBottom: 10 }}>Symbols</h3>
-        <div style={{ overflowX: "auto", border: "1px solid #333", borderRadius: 12 }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+        <div style={{ overflowX: "auto", marginTop: 12 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
-              <tr style={{ textAlign: "left" }}>
-                <th style={{ padding: 10, borderBottom: "1px solid #333" }}>Symbol</th>
-                <th style={{ padding: 10, borderBottom: "1px solid #333" }}>Latest</th>
-                <th style={{ padding: 10, borderBottom: "1px solid #333" }}>24h %</th>
-                <th style={{ padding: 10, borderBottom: "1px solid #333" }}>24h volume</th>
-                <th style={{ padding: 10, borderBottom: "1px solid #333" }}>Last candle</th>
+              <tr>
+                <th>Symbol</th>
+                <th>Latest</th>
+                <th>24h %</th>
+                <th>24h Volume</th>
+                <th>Last Candle</th>
               </tr>
             </thead>
             <tbody>
-              {symbols.map((r) => (
-                <tr key={r.symbol}>
-                  <td style={{ padding: 10, borderBottom: "1px solid #222" }}>
-                    <Link
-                      href={`/symbol/${encodeURIComponent(r.symbol)}`}
-                      style={{ textDecoration: "underline" }}
-                    >
-                      {r.symbol}
+              {symbols.map((s) => (
+                <tr key={s.symbol}>
+                  <td>
+                    <Link href={`/symbol/${encodeURIComponent(s.symbol)}`}>
+                      {s.symbol}
                     </Link>
                   </td>
-                  <td style={{ padding: 10, borderBottom: "1px solid #222" }}>
-                    {fmtNum(r.latest_close)}
-                  </td>
-                  <td style={{ padding: 10, borderBottom: "1px solid #222" }}>
-                    {fmtPct(r.pct_change_24h)}
-                  </td>
-                  <td style={{ padding: 10, borderBottom: "1px solid #222" }}>
-                    {fmtNum(r.volume_24h)}
-                  </td>
-                  <td style={{ padding: 10, borderBottom: "1px solid #222" }}>
-                    {new Date(r.latest_bucket).toLocaleString()}
-                  </td>
+                  <td>{fmtNum(s.latest_close)}</td>
+                  <td>{fmtPct(s.pct_change_24h)}</td>
+                  <td>{fmtNum(s.volume_24h)}</td>
+                  <td>{new Date(s.latest_bucket).toLocaleString()}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-      </section>
-    </main>
-  );
+
+        {/* ---- CHARTS ---- */}
+        <OverviewCharts series={series} />
+      </main>
+    );
+  } finally {
+    client?.release();
+  }
 }

@@ -1,46 +1,75 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type Mode = "A" | "D";
+type Confidence = "LOW" | "MED" | "HIGH";
 
-type PredictResponse =
-  | {
-      ok: true;
-      symbol: string;
-      horizon_minutes: number;
-      mode: "A";
-      asof_bucket: string;
-      asof_close: number;
-      prob_up: number;
-      direction: "UP" | "DOWN";
-      confidence: "LOW" | "MED" | "HIGH";
-      model_metrics?: any;
-    }
-  | {
-      ok: true;
-      symbol: string;
-      horizon_minutes: number;
-      mode: "D";
-      thr: number;
-      asof_bucket: string;
-      asof_close: number;
-      prob_strong_up: number;
-      signal: "STRONG_UP" | "NO_SIGNAL";
-      confidence: "LOW" | "MED" | "HIGH";
-      model_metrics?: any;
-    }
-  | {
-      ok: false;
-      error: string;
-      [k: string]: any;
-    };
+type ModelMetrics = {
+  auc_mean?: number;
+  prauc_mean?: number;
+  prauc_baseline?: number;
+  positive_rate?: number;
+};
+
+type PredictSuccessA = {
+  ok: true;
+  symbol: string;
+  horizon_minutes: number;
+  mode: "A";
+  asof_bucket: string;
+  asof_close: number;
+  prob_up: number;
+  direction: "UP" | "DOWN";
+  confidence: Confidence;
+  model_metrics?: ModelMetrics;
+};
+
+type PredictSuccessD = {
+  ok: true;
+  symbol: string;
+  horizon_minutes: number;
+  mode: "D";
+  thr: number;
+  asof_bucket: string;
+  asof_close: number;
+  prob_strong_up: number;
+  signal: "STRONG_UP" | "NO_SIGNAL";
+  confidence: Confidence;
+  model_metrics?: ModelMetrics;
+};
+
+type PredictError = {
+  ok: false;
+  error: string;
+  // allow backend to send extra debug fields safely (no `any`)
+  details?: unknown;
+  raw?: unknown;
+};
+
+type PredictResponse = PredictSuccessA | PredictSuccessD | PredictError;
 
 function pct(x: number) {
   return `${(x * 100).toFixed(2)}%`;
 }
 
-export default function PredictPanel({ defaultSymbol = "BTCUSD" }: { defaultSymbol?: string }) {
+function isPredictResponse(x: unknown): x is PredictResponse {
+  if (!x || typeof x !== "object") return false;
+  const obj = x as Record<string, unknown>;
+  return typeof obj.ok === "boolean";
+}
+
+function getErrorMessage(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  if (typeof e === "string") return e;
+  return "Fetch failed";
+}
+
+export default function PredictPanel({
+  defaultSymbol = "BTCUSD",
+}: {
+  defaultSymbol?: string;
+}) {
   const [symbol, setSymbol] = useState(defaultSymbol);
   const [mode, setMode] = useState<Mode>("D");
   const [horizon, setHorizon] = useState(60);
@@ -52,6 +81,9 @@ export default function PredictPanel({ defaultSymbol = "BTCUSD" }: { defaultSymb
   const [loading, setLoading] = useState(false);
   const [data, setData] = useState<PredictResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<string | null>(null);
+
+  const abortRef = useRef<AbortController | null>(null);
 
   const requestUrl = useMemo(() => {
     const qp = new URLSearchParams();
@@ -61,42 +93,72 @@ export default function PredictPanel({ defaultSymbol = "BTCUSD" }: { defaultSymb
     return `/api/predict/${encodeURIComponent(symbol)}?${qp.toString()}`;
   }, [symbol, mode, horizon, thr]);
 
-  async function fetchPredict() {
+  const fetchPredict = useCallback(async () => {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     setLoading(true);
     setErr(null);
+
     try {
-      const res = await fetch(requestUrl, { cache: "no-store" });
-      const json = (await res.json()) as PredictResponse;
-      setData(json);
-      if (!("ok" in json) || json.ok !== true) {
-        setErr((json as any).error ?? "Unknown API error");
+      const res = await fetch(requestUrl, {
+        method: "GET",
+        cache: "no-store",
+        signal: controller.signal,
+        headers: { accept: "application/json" },
+      });
+
+      const jsonUnknown: unknown = await res.json().catch(() => null);
+
+      if (!isPredictResponse(jsonUnknown)) {
+        setData({ ok: false, error: "Invalid API response shape", raw: jsonUnknown });
+        setErr("Invalid API response shape");
+        return;
       }
-    } catch (e: any) {
-      setErr(e?.message ?? "Fetch failed");
+
+      setData(jsonUnknown);
+
+      if (!res.ok) {
+        setErr(
+          jsonUnknown.ok === false
+            ? jsonUnknown.error
+            : `Request failed (${res.status} ${res.statusText})`
+        );
+        return;
+      }
+
+      if (jsonUnknown.ok !== true) {
+        setErr(jsonUnknown.error ?? "Unknown API error");
+        return;
+      }
+
+      setLastUpdated(new Date().toLocaleString());
+    } catch (e: unknown) {
+      if (e instanceof DOMException && e.name === "AbortError") return;
+      setErr(getErrorMessage(e));
       setData(null);
     } finally {
       setLoading(false);
     }
-  }
-
-  // initial load + refresh when settings change
-  useEffect(() => {
-    fetchPredict();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [requestUrl]);
 
-  // auto refresh
+  useEffect(() => {
+    fetchPredict();
+    return () => abortRef.current?.abort();
+  }, [fetchPredict]);
+
   useEffect(() => {
     if (!autoRefresh) return;
     const ms = Math.max(5, refreshSec) * 1000;
     const id = setInterval(fetchPredict, ms);
     return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoRefresh, refreshSec, requestUrl]);
+  }, [autoRefresh, refreshSec, fetchPredict]);
 
   const badge = (text: string, tone: "green" | "red" | "gray" | "blue") => {
-    const base = "inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold";
-    const map = {
+    const base =
+      "inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold";
+    const map: Record<typeof tone, string> = {
       green: "bg-green-100 text-green-800",
       red: "bg-red-100 text-red-800",
       gray: "bg-gray-100 text-gray-800",
@@ -110,7 +172,14 @@ export default function PredictPanel({ defaultSymbol = "BTCUSD" }: { defaultSymb
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <div className="text-lg font-semibold">🔮 Prediction</div>
-          <div className="text-sm text-gray-500">Interactive model run (A = direction, D = strong-up signal)</div>
+          <div className="text-sm text-gray-500">
+            Interactive model run (A = direction, D = strong-up signal)
+          </div>
+          {lastUpdated && (
+            <div className="mt-1 text-xs text-gray-400">
+              Last updated: {lastUpdated}
+            </div>
+          )}
         </div>
 
         <button
@@ -130,11 +199,11 @@ export default function PredictPanel({ defaultSymbol = "BTCUSD" }: { defaultSymb
             value={symbol}
             onChange={(e) => setSymbol(e.target.value)}
             className="mt-1 w-full rounded-lg border px-3 py-2 text-sm"
-         >
+          >
             <option value="BTCUSD">BTCUSD</option>
             <option value="ETHUSD">ETHUSD</option>
             <option value="SOLUSD">SOLUSD</option>
-        </select>
+          </select>
         </div>
 
         <div className="rounded-xl border p-3">
@@ -210,18 +279,31 @@ export default function PredictPanel({ defaultSymbol = "BTCUSD" }: { defaultSymb
 
       {/* Result */}
       <div className="mt-4 rounded-2xl border bg-gray-50 p-4">
-        {err && <div className="mb-3 rounded-lg bg-red-50 p-3 text-sm text-red-700">❌ {err}</div>}
+        {err && (
+          <div className="mb-3 rounded-lg bg-red-50 p-3 text-sm text-red-700">
+            ❌ {err}
+          </div>
+        )}
 
         {!data ? (
           <div className="text-sm text-gray-500">No result yet.</div>
-        ) : (data as any).ok === false ? (
-          <pre className="overflow-auto rounded-lg bg-white p-3 text-xs">{JSON.stringify(data, null, 2)}</pre>
+        ) : data.ok === false ? (
+          <pre className="overflow-auto rounded-lg bg-white p-3 text-xs">
+            {JSON.stringify(data, null, 2)}
+          </pre>
         ) : data.mode === "D" ? (
           <div className="space-y-3">
             <div className="flex flex-wrap items-center gap-2">
               {badge("D: Strong UP", "blue")}
               {badge(data.signal, data.signal === "STRONG_UP" ? "green" : "gray")}
-              {badge(`Confidence: ${data.confidence}`, data.confidence === "HIGH" ? "green" : data.confidence === "MED" ? "blue" : "gray")}
+              {badge(
+                `Confidence: ${data.confidence}`,
+                data.confidence === "HIGH"
+                  ? "green"
+                  : data.confidence === "MED"
+                  ? "blue"
+                  : "gray"
+              )}
             </div>
 
             <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
@@ -235,17 +317,19 @@ export default function PredictPanel({ defaultSymbol = "BTCUSD" }: { defaultSymb
               </div>
               <div className="rounded-xl bg-white p-3">
                 <div className="text-xs text-gray-500">As of close</div>
-                <div className="text-2xl font-semibold">{data.asof_close.toFixed(2)}</div>
+                <div className="text-2xl font-semibold">
+                  {Number(data.asof_close).toFixed(2)}
+                </div>
               </div>
             </div>
 
             <div className="rounded-xl bg-white p-3 text-sm">
               <div className="font-semibold">Model metrics</div>
               <div className="mt-1 grid grid-cols-2 gap-2 text-xs text-gray-600 md:grid-cols-4">
-                <div>AUC: {(data.model_metrics?.auc_mean ?? 0).toFixed(3)}</div>
-                <div>PR-AUC: {(data.model_metrics?.prauc_mean ?? 0).toFixed(3)}</div>
-                <div>Baseline: {(data.model_metrics?.prauc_baseline ?? 0).toFixed(3)}</div>
-                <div>Pos rate: {(data.model_metrics?.positive_rate ?? 0).toFixed(3)}</div>
+                <div>AUC: {Number(data.model_metrics?.auc_mean ?? 0).toFixed(3)}</div>
+                <div>PR-AUC: {Number(data.model_metrics?.prauc_mean ?? 0).toFixed(3)}</div>
+                <div>Baseline: {Number(data.model_metrics?.prauc_baseline ?? 0).toFixed(3)}</div>
+                <div>Pos rate: {Number(data.model_metrics?.positive_rate ?? 0).toFixed(3)}</div>
               </div>
             </div>
           </div>
@@ -254,7 +338,14 @@ export default function PredictPanel({ defaultSymbol = "BTCUSD" }: { defaultSymb
             <div className="flex flex-wrap items-center gap-2">
               {badge("A: Direction", "blue")}
               {badge(data.direction, data.direction === "UP" ? "green" : "red")}
-              {badge(`Confidence: ${data.confidence}`, data.confidence === "HIGH" ? "green" : data.confidence === "MED" ? "blue" : "gray")}
+              {badge(
+                `Confidence: ${data.confidence}`,
+                data.confidence === "HIGH"
+                  ? "green"
+                  : data.confidence === "MED"
+                  ? "blue"
+                  : "gray"
+              )}
             </div>
 
             <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
@@ -268,16 +359,18 @@ export default function PredictPanel({ defaultSymbol = "BTCUSD" }: { defaultSymb
               </div>
               <div className="rounded-xl bg-white p-3">
                 <div className="text-xs text-gray-500">As of close</div>
-                <div className="text-2xl font-semibold">{data.asof_close.toFixed(2)}</div>
+                <div className="text-2xl font-semibold">
+                  {Number(data.asof_close).toFixed(2)}
+                </div>
               </div>
             </div>
 
             <div className="rounded-xl bg-white p-3 text-sm">
               <div className="font-semibold">Model metrics</div>
               <div className="mt-1 grid grid-cols-2 gap-2 text-xs text-gray-600 md:grid-cols-3">
-                <div>AUC: {(data.model_metrics?.auc_mean ?? 0).toFixed(3)}</div>
-                <div>PR-AUC: {(data.model_metrics?.prauc_mean ?? 0).toFixed(3)}</div>
-                <div>Baseline: {(data.model_metrics?.prauc_baseline ?? 0).toFixed(3)}</div>
+                <div>AUC: {Number(data.model_metrics?.auc_mean ?? 0).toFixed(3)}</div>
+                <div>PR-AUC: {Number(data.model_metrics?.prauc_mean ?? 0).toFixed(3)}</div>
+                <div>Baseline: {Number(data.model_metrics?.prauc_baseline ?? 0).toFixed(3)}</div>
               </div>
             </div>
           </div>

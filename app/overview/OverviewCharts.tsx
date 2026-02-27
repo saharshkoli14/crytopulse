@@ -1,5 +1,6 @@
 "use client";
 
+import React from "react";
 import {
   ResponsiveContainer,
   LineChart,
@@ -11,6 +12,8 @@ import {
   BarChart,
   Bar,
 } from "recharts";
+
+import type { NameType, ValueType } from "recharts/types/component/DefaultTooltipContent";
 
 type Point = {
   bucket: string;
@@ -28,7 +31,7 @@ function fmtNum(x: number | null | undefined) {
   return Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(x);
 }
 
-// Dark-theme chart styles (so axes/grid/tooltip are visible on your new background)
+// Dark-theme chart styles (so axes/grid/tooltip are visible on your background)
 const AXIS_STROKE = "rgba(255,255,255,0.55)";
 const TICK_FILL = "rgba(255,255,255,0.75)";
 const GRID_STROKE = "rgba(255,255,255,0.10)";
@@ -44,6 +47,20 @@ const tooltipLabelStyle: React.CSSProperties = {
   color: "rgba(255,255,255,0.85)",
 };
 
+// ✅ Recharts can pass undefined; accept value?: ValueType and name?: NameType
+function tooltipNumberFormatter(value?: ValueType, name?: NameType): [string, string] {
+  if (value === null || value === undefined) return ["—", String(name ?? "")];
+
+  const num =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+      ? Number(value)
+      : NaN;
+
+  return [fmtNum(Number.isFinite(num) ? num : null), String(name ?? "")];
+}
+
 export default function OverviewCharts({ series }: { series: Point[] }) {
   const data = (series ?? []).map((p) => ({
     ...p,
@@ -53,12 +70,7 @@ export default function OverviewCharts({ series }: { series: Point[] }) {
   return (
     <section style={{ marginTop: 18, display: "grid", gap: 14 }}>
       {/* Market Index */}
-      <div
-        className="glass"
-        style={{
-          padding: 14,
-        }}
-      >
+      <div className="glass" style={{ padding: 14 }}>
         <h3 style={{ marginTop: 0, marginBottom: 10 }}>Market Index (base=100)</h3>
 
         <div style={{ height: 280 }}>
@@ -76,7 +88,7 @@ export default function OverviewCharts({ series }: { series: Point[] }) {
               />
 
               <YAxis
-                tickFormatter={(v) => String(Math.round(v))}
+                tickFormatter={(v) => String(Math.round(Number(v)))}
                 stroke={AXIS_STROKE}
                 tick={{ fill: TICK_FILL, fontSize: 12 }}
                 tickLine={{ stroke: AXIS_STROKE }}
@@ -84,13 +96,12 @@ export default function OverviewCharts({ series }: { series: Point[] }) {
               />
 
               <Tooltip
-                formatter={(v: any) => fmtNum(typeof v === "number" ? v : Number(v))}
+                formatter={tooltipNumberFormatter}
                 labelFormatter={(label) => `Time: ${label}`}
                 contentStyle={tooltipContentStyle}
                 labelStyle={tooltipLabelStyle}
               />
 
-              {/* Let the theme decide the line color; keep it visible with a thicker stroke */}
               <Line type="monotone" dataKey="market_index" dot={false} strokeWidth={2} />
             </LineChart>
           </ResponsiveContainer>
@@ -123,13 +134,12 @@ export default function OverviewCharts({ series }: { series: Point[] }) {
               />
 
               <Tooltip
-                formatter={(v: any) => fmtNum(typeof v === "number" ? v : Number(v))}
+                formatter={tooltipNumberFormatter}
                 labelFormatter={(label) => `Time: ${label}`}
                 contentStyle={tooltipContentStyle}
                 labelStyle={tooltipLabelStyle}
               />
 
-              {/* Bar with a visible fill on dark background */}
               <Bar dataKey="total_volume" fill="rgba(99,102,241,0.65)" />
             </BarChart>
           </ResponsiveContainer>

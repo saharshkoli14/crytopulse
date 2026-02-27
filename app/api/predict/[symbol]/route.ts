@@ -1,172 +1,165 @@
-import { NextRequest, NextResponse } from "next/server";
-import path from "path";
-import fs from "fs";
-import { spawn } from "child_process";
+import { NextResponse, type NextRequest } from "next/server";
+import { Pool } from "pg";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
-function asNumber(v: string | null, fallback: number) {
-  const n = v ? Number(v) : NaN;
-  return Number.isFinite(n) ? n : fallback;
+type Mode = "A" | "D";
+type Confidence = "LOW" | "MED" | "HIGH";
+
+// ✅ Your real table:
+const TABLE = "public.ohlcv_1m";
+const COL_SYMBOL = "symbol";
+const COL_BUCKET = "bucket";
+const COL_CLOSE = "close";
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false },
+});
+
+function mustEnv(name: string, v: string | undefined) {
+  if (!v) throw new Error(`Missing env ${name}`);
+  return v;
 }
 
-function asMode(v: string | null) {
-  const m = (v || "D").toUpperCase();
-  return m === "A" || m === "D" ? m : "D";
+function clamp(n: number, lo: number, hi: number) {
+  return Math.max(lo, Math.min(hi, n));
 }
 
-/**
- * Walk upward from a starting directory to find the repo root
- * by locating ml/predict.py.
- */
-function findRepoRoot(startDir: string, maxUp = 8): string | null {
-  let dir = startDir;
-  for (let i = 0; i <= maxUp; i++) {
-    const candidate = path.join(dir, "ml", "predict.py");
-    if (fs.existsSync(candidate)) return dir;
-    const parent = path.dirname(dir);
-    if (parent === dir) break; // reached filesystem root
-    dir = parent;
-  }
-  return null;
+function confidenceFrom(p: number, n: number): Confidence {
+  if (n >= 600 && (p <= 0.35 || p >= 0.65)) return "HIGH";
+  if (n >= 250) return "MED";
+  return "LOW";
 }
 
 export async function GET(
   req: NextRequest,
-  context: { params: Promise<{ symbol: string }> }
+  ctx: { params: Promise<{ symbol: string }> }
 ) {
-  const { symbol: rawSymbol } = await context.params;
-  const symbol = (rawSymbol || "").toUpperCase();
+  try {
+    mustEnv("DATABASE_URL", process.env.DATABASE_URL);
 
-  const url = new URL(req.url);
-  const horizon = asNumber(url.searchParams.get("horizon"), 60);
-  const mode = asMode(url.searchParams.get("mode"));
-  const thr = asNumber(url.searchParams.get("thr"), 0.0035);
-  const asofRows = asNumber(url.searchParams.get("asof_rows"), 250);
+    const { symbol } = await ctx.params;
+    const url = new URL(req.url);
 
-  // 🔥 Robust root detection (no assumptions about process.cwd)
-  const cwd = process.cwd();
-  const repoRoot = findRepoRoot(cwd) ?? findRepoRoot(path.resolve(cwd, "..")) ?? null;
-
-  if (!repoRoot) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: "Could not locate repo root (ml/predict.py not found).",
-        cwd,
-        hint: "Start `npm run dev` from inside `cryptopulse-dashboard` or repo root.",
-      },
-      { status: 500 }
+    const mode = (url.searchParams.get("mode") ?? "D") as Mode;
+    const horizonMinutes = clamp(
+      Number(url.searchParams.get("horizon") ?? "60"),
+      5,
+      240
     );
-  }
-
-  const scriptPath = path.join(repoRoot, "ml", "predict.py");
-  const pyExe = path.join(repoRoot, ".venv-ml", "Scripts", "python.exe");
-
-  // Validate paths before spawn (prevents ENOENT crash)
-  const existsScript = fs.existsSync(scriptPath);
-  const existsPy = fs.existsSync(pyExe);
-
-  if (!existsScript || !existsPy) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: "Required file not found.",
-        repoRoot,
-        cwd,
-        scriptPath,
-        existsScript,
-        pyExe,
-        existsPy,
-        fix: [
-          "Make sure .venv-ml exists at repo root: <repo>/.venv-ml/Scripts/python.exe",
-          "If your venv is elsewhere, move/copy it to repo root or recreate it there.",
-        ],
-      },
-      { status: 500 }
+    const thr = clamp(
+      Number(url.searchParams.get("thr") ?? "0.0035"),
+      0.0005,
+      0.05
     );
-  }
 
-  const args: string[] = [
-    scriptPath,
-    symbol,
-    String(horizon),
-    "--mode",
-    mode,
-    "--thr",
-    String(thr),
-    "--asof_rows",
-    String(asofRows),
-  ];
+    // 1-minute candles assumption
+    const horizonSteps = horizonMinutes;
+    const LIMIT = clamp(1200 + horizonSteps, 300, 5000);
 
-  return await new Promise((resolve) => {
-    const child = spawn(pyExe, args, { cwd: repoRoot });
+    const sql = `
+      SELECT ${COL_BUCKET} as bucket, ${COL_CLOSE} as close
+      FROM ${TABLE}
+      WHERE ${COL_SYMBOL} = $1
+      ORDER BY ${COL_BUCKET} DESC
+      LIMIT $2
+    `;
 
-    let stdout = "";
-    let stderr = "";
+    const { rows } = await pool.query<{ bucket: string; close: number }>(sql, [
+      symbol,
+      LIMIT,
+    ]);
 
-    // ✅ handle spawn error (prevents uncaughtException)
-    child.on("error", (err: any) => {
-      resolve(
-        NextResponse.json(
-          {
-            ok: false,
-            error: "Failed to spawn python process",
-            message: err?.message ?? String(err),
-            repoRoot,
-            cwd,
-            pyExe,
-            scriptPath,
-            args,
-          },
-          { status: 500 }
-        )
+    if (!rows || rows.length < horizonSteps + 30) {
+      return NextResponse.json(
+        { ok: false, error: "Not enough candle data to compute prediction." },
+        { status: 400 }
       );
-    });
+    }
 
-    child.stdout.on("data", (d) => (stdout += d.toString()));
-    child.stderr.on("data", (d) => (stderr += d.toString()));
+    const asc = [...rows].reverse();
+    const latest = asc[asc.length - 1];
 
-    child.on("close", (code) => {
-      if (code !== 0) {
-        resolve(
-          NextResponse.json(
-            {
-              ok: false,
-              error: "predict.py exited with non-zero code",
-              code,
-              repoRoot,
-              cwd,
-              stderr: stderr || null,
-              stdout: stdout || null,
-              pyExe,
-              scriptPath,
-              args,
-            },
-            { status: 500 }
-          )
-        );
-        return;
-      }
+    const asof_bucket = latest.bucket;
+    const asof_close = Number(latest.close);
 
-      try {
-        const obj = JSON.parse(stdout.trim());
-        resolve(NextResponse.json({ ok: true, ...obj }));
-      } catch {
-        resolve(
-          NextResponse.json(
-            {
-              ok: false,
-              error: "predict.py output was not valid JSON",
-              repoRoot,
-              cwd,
-              stdout: stdout.trim(),
-              stderr: stderr || null,
-            },
-            { status: 500 }
-          )
-        );
-      }
-    });
-  });
+    let total = 0;
+    let up = 0;
+    let strongUp = 0;
+
+    for (let i = 0; i + horizonSteps < asc.length; i++) {
+      const c0 = Number(asc[i].close);
+      const c1 = Number(asc[i + horizonSteps].close);
+      if (!Number.isFinite(c0) || !Number.isFinite(c1) || c0 <= 0) continue;
+
+      const ret = (c1 - c0) / c0;
+      total += 1;
+
+      if (ret > 0) up += 1;
+      if (ret >= thr) strongUp += 1;
+    }
+
+    if (total < 30) {
+      return NextResponse.json(
+        { ok: false, error: "Insufficient valid samples for prediction." },
+        { status: 400 }
+      );
+    }
+
+    if (mode === "A") {
+      const prob_up = up / total;
+      const direction = prob_up >= 0.5 ? "UP" : "DOWN";
+      const confidence = confidenceFrom(prob_up, total);
+
+      return NextResponse.json(
+        {
+          ok: true,
+          symbol,
+          horizon_minutes: horizonMinutes,
+          mode: "A",
+          asof_bucket,
+          asof_close,
+          prob_up,
+          direction,
+          confidence,
+          model_metrics: {
+            positive_rate: prob_up,
+            samples: total,
+            note: "Heuristic probability from historical horizon returns",
+          },
+        },
+        { status: 200 }
+      );
+    }
+
+    const prob_strong_up = strongUp / total;
+    const signal = prob_strong_up >= 0.5 ? "STRONG_UP" : "NO_SIGNAL";
+    const confidence = confidenceFrom(prob_strong_up, total);
+
+    return NextResponse.json(
+      {
+        ok: true,
+        symbol,
+        horizon_minutes: horizonMinutes,
+        mode: "D",
+        thr,
+        asof_bucket,
+        asof_close,
+        prob_strong_up,
+        signal,
+        confidence,
+        model_metrics: {
+          positive_rate: prob_strong_up,
+          samples: total,
+          note: "Heuristic strong-up probability from historical horizon returns",
+        },
+      },
+      { status: 200 }
+    );
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : "Unexpected error";
+    return NextResponse.json({ ok: false, error: msg }, { status: 500 });
+  }
 }

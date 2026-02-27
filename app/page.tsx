@@ -27,8 +27,17 @@ function fmtPct(x: number | null | undefined) {
   return `${s}${v.toFixed(2)}%`;
 }
 
+function getBaseUrl() {
+  return (
+    process.env.NEXT_PUBLIC_BASE_URL ??
+    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000")
+  );
+}
+
 export default async function HomePage() {
-  const res = await fetch("http://localhost:3000/api/overview", {
+  const baseUrl = getBaseUrl();
+
+  const res = await fetch(`${baseUrl}/api/overview`, {
     cache: "no-store",
   });
 
@@ -52,6 +61,7 @@ export default async function HomePage() {
 
   const data: OverviewResponse = await res.json();
 
+  // remove BTCUSDT
   const symbols = (data.symbols ?? []).filter(
     (r) => String(r.symbol).trim().toUpperCase() !== "BTCUSDT"
   );
@@ -76,11 +86,14 @@ export default async function HomePage() {
 
           <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap" }}>
             <Link
-            href="/prediction"
-            className="btn"
-            style={{ boxShadow: "0 0 0 1px rgba(99,102,241,0.35), 0 12px 30px rgba(99,102,241,0.12)" }}
+              href="/prediction"
+              className="btn"
+              style={{
+                boxShadow:
+                  "0 0 0 1px rgba(99,102,241,0.35), 0 12px 30px rgba(99,102,241,0.12)",
+              }}
             >
-            🔮 Get a Prediction
+              🔮 Get a Prediction
             </Link>
             <Link href="/overview" className="btn">
               Overview
