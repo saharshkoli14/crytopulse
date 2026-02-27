@@ -4,7 +4,7 @@ import SymbolCharts from "./SymbolCharts";
 export const dynamic = "force-dynamic";
 
 type PageProps = {
-  params: { symbol: string };
+  params: Promise<{ symbol: string }>;
 };
 
 type Point = {
@@ -33,7 +33,6 @@ type ApiStats = {
 };
 
 type ApiResponse = {
-  // either one may exist
   updatedAt?: string;
   updated_at?: string;
 
@@ -51,7 +50,6 @@ type ApiResponse = {
 function mustBaseUrl(): string {
   const v = process.env.NEXT_PUBLIC_BASE_URL;
   if (v && v.startsWith("http")) return v.replace(/\/+$/, "");
-  // fallback for local dev only
   return "http://localhost:3000";
 }
 
@@ -80,9 +78,9 @@ function pickStat(stats: ApiStats | undefined, camel: keyof ApiStats, snake: key
 }
 
 export default async function SymbolPage({ params }: PageProps) {
-  const symbol = params.symbol;
-  const baseUrl = mustBaseUrl();
+  const { symbol } = await params;
 
+  const baseUrl = mustBaseUrl();
   const res = await fetch(`${baseUrl}/api/symbol/${encodeURIComponent(symbol)}`, {
     cache: "no-store",
   });
@@ -113,7 +111,6 @@ export default async function SymbolPage({ params }: PageProps) {
   const low24h = pickStat(stats, "low24h", "low_24h");
   const volume24h = pickStat(stats, "volume24h", "volume_24h");
 
-  // convert API points (close/volume only) into the Point shape SymbolCharts expects
   const points: Point[] = Array.isArray(data.points)
     ? data.points.map((p) => ({
         bucket: p.bucket,
