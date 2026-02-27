@@ -1,7 +1,5 @@
 import Link from "next/link";
 
-export const dynamic = "force-dynamic";
-
 type OverviewRow = {
   symbol: string;
   latest_bucket: string;
@@ -29,15 +27,19 @@ function fmtPct(x: number | null | undefined) {
   return `${s}${v.toFixed(2)}%`;
 }
 
-function baseUrl() {
-  // Works locally + on Vercel if you set NEXT_PUBLIC_BASE_URL
-  const fromEnv = process.env.NEXT_PUBLIC_BASE_URL;
-  if (fromEnv && fromEnv.startsWith("http")) return fromEnv.replace(/\/$/, "");
-  return "http://localhost:3000";
+function getBaseUrl() {
+  return (
+    process.env.NEXT_PUBLIC_BASE_URL ??
+    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000")
+  );
 }
 
 export default async function HomePage() {
-  const res = await fetch(`${baseUrl()}/api/overview`, { cache: "no-store" });
+  const baseUrl = getBaseUrl();
+
+  const res = await fetch(`${baseUrl}/api/overview`, {
+    cache: "no-store",
+  });
 
   if (!res.ok) {
     return (
@@ -59,6 +61,7 @@ export default async function HomePage() {
 
   const data: OverviewResponse = await res.json();
 
+  // remove BTCUSDT
   const symbols = (data.symbols ?? []).filter(
     (r) => String(r.symbol).trim().toUpperCase() !== "BTCUSDT"
   );
@@ -113,7 +116,14 @@ export default async function HomePage() {
       >
         {symbols.map((r) => (
           <div key={r.symbol} className="glass" style={{ padding: 16 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10 }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "baseline",
+                gap: 10,
+              }}
+            >
               <h2 style={{ margin: 0, fontSize: 18 }}>{r.symbol}</h2>
               <span style={{ opacity: 0.75, fontSize: 12 }}>
                 {new Date(r.latest_bucket).toLocaleString()}
@@ -152,7 +162,11 @@ export default async function HomePage() {
             </div>
 
             <div style={{ marginTop: 14 }}>
-              <Link href={`/symbol/${encodeURIComponent(r.symbol)}`} className="btn" style={{ display: "inline-flex" }}>
+              <Link
+                href={`/symbol/${encodeURIComponent(r.symbol)}`}
+                className="btn"
+                style={{ display: "inline-flex" }}
+              >
                 View details →
               </Link>
             </div>
@@ -167,11 +181,21 @@ export default async function HomePage() {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
               <tr style={{ textAlign: "left" }}>
-                <th style={{ padding: 12, borderBottom: "1px solid rgba(255,255,255,0.10)" }}>Symbol</th>
-                <th style={{ padding: 12, borderBottom: "1px solid rgba(255,255,255,0.10)" }}>Latest</th>
-                <th style={{ padding: 12, borderBottom: "1px solid rgba(255,255,255,0.10)" }}>24h %</th>
-                <th style={{ padding: 12, borderBottom: "1px solid rgba(255,255,255,0.10)" }}>24h volume</th>
-                <th style={{ padding: 12, borderBottom: "1px solid rgba(255,255,255,0.10)" }}>Last candle</th>
+                <th style={{ padding: 12, borderBottom: "1px solid rgba(255,255,255,0.10)" }}>
+                  Symbol
+                </th>
+                <th style={{ padding: 12, borderBottom: "1px solid rgba(255,255,255,0.10)" }}>
+                  Latest
+                </th>
+                <th style={{ padding: 12, borderBottom: "1px solid rgba(255,255,255,0.10)" }}>
+                  24h %
+                </th>
+                <th style={{ padding: 12, borderBottom: "1px solid rgba(255,255,255,0.10)" }}>
+                  24h volume
+                </th>
+                <th style={{ padding: 12, borderBottom: "1px solid rgba(255,255,255,0.10)" }}>
+                  Last candle
+                </th>
               </tr>
             </thead>
             <tbody>

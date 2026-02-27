@@ -12,7 +12,11 @@ import {
   BarChart,
   Bar,
 } from "recharts";
-import type { NameType, ValueType } from "recharts/types/component/DefaultTooltipContent";
+import type {
+  NameType,
+  ValueType,
+  Payload,
+} from "recharts/types/component/DefaultTooltipContent";
 
 type Point = {
   bucket: string;
@@ -52,42 +56,37 @@ const tooltipLabelStyle: React.CSSProperties = {
   color: "rgba(255,255,255,0.85)",
 };
 
-// ✅ Recharts may pass undefined -> accept optional args
-function tooltipValueFormatter(value?: ValueType, name?: NameType): [string, string] {
-  const label = typeof name === "string" ? name : String(name ?? "");
+// Recharts Tooltip formatter signature (strict)
+type TooltipFormatter = (
+  value: ValueType | undefined,
+  name: string,
+  item: Payload<ValueType, string>,
+  index: number,
+  payload: Array<Payload<ValueType, string>>
+) => React.ReactNode | [React.ReactNode, string];
 
-  if (value === null || value === undefined) return ["—", label];
-
-  const num =
-    typeof value === "number"
-      ? value
-      : typeof value === "string"
-      ? Number(value)
-      : NaN;
-
-  const pretty = Number.isFinite(num) ? fmtNum(num, 2) : "—";
-  return [pretty, label];
+function toNumber(v: ValueType | undefined): number | null {
+  if (v === null || v === undefined) return null;
+  if (typeof v === "number") return Number.isFinite(v) ? v : null;
+  if (typeof v === "string") {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
 }
 
-// ✅ Recharts may pass undefined -> accept optional args
-function tooltipVolumeFormatter(value?: ValueType, name?: NameType): [string, string] {
-  const label = typeof name === "string" ? name : String(name ?? "");
+const tooltipValueFormatter: TooltipFormatter = (value, name) => {
+  const n = toNumber(value);
+  const pretty = n === null ? "—" : fmtNum(n, 2);
+  return [pretty, name];
+};
 
-  if (value === null || value === undefined) return ["—", label];
-
-  const num =
-    typeof value === "number"
-      ? value
-      : typeof value === "string"
-      ? Number(value)
-      : NaN;
-
-  const pretty = Number.isFinite(num)
-    ? Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(num)
-    : "—";
-
-  return [pretty, label];
-}
+const tooltipVolumeFormatter: TooltipFormatter = (value, name) => {
+  const n = toNumber(value);
+  const pretty =
+    n === null ? "—" : Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(n);
+  return [pretty, name];
+};
 
 export default function SymbolCharts({ points }: { points: Point[] }) {
   // Keep charts smooth by downsampling if you have 1440 points
@@ -126,7 +125,7 @@ export default function SymbolCharts({ points }: { points: Point[] }) {
               <Tooltip
                 contentStyle={tooltipContentStyle}
                 labelStyle={tooltipLabelStyle}
-                labelFormatter={(l) => new Date(String(l)).toLocaleString()}
+                labelFormatter={(l: NameType) => new Date(String(l)).toLocaleString()}
                 formatter={tooltipValueFormatter}
               />
 
@@ -172,7 +171,7 @@ export default function SymbolCharts({ points }: { points: Point[] }) {
               <Tooltip
                 contentStyle={tooltipContentStyle}
                 labelStyle={tooltipLabelStyle}
-                labelFormatter={(l) => new Date(String(l)).toLocaleString()}
+                labelFormatter={(l: NameType) => new Date(String(l)).toLocaleString()}
                 formatter={tooltipVolumeFormatter}
               />
 

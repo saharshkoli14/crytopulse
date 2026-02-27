@@ -28,20 +28,14 @@ function toNum(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-export async function GET(
-  req: NextRequest,
-  ctx: { params: Promise<{ symbol: string }> }
-) {
+export async function GET(req: NextRequest, ctx: { params: { symbol: string } }) {
   try {
     mustEnv("DATABASE_URL", process.env.DATABASE_URL);
 
-    const { symbol } = await ctx.params;
+    const symbol = ctx.params.symbol;
     const url = new URL(req.url);
 
-    const limit = Math.min(
-      3000,
-      Math.max(10, Number(url.searchParams.get("limit") ?? "1440"))
-    );
+    const limit = Math.min(3000, Math.max(10, Number(url.searchParams.get("limit") ?? "1440")));
 
     // --- Latest candle
     const qLatest = `
@@ -56,7 +50,14 @@ export async function GET(
     const latestBucket = latestRow?.bucket ?? null;
     const latestClose = toNum(latestRow?.close);
 
-    // --- 24h stats (high/low/volume + close_24h_ago)
+    if (!latestBucket || latestClose === null) {
+      return NextResponse.json(
+        { ok: false, error: `No data found for symbol ${symbol}` },
+        { status: 404 }
+      );
+    }
+
+    // --- 24h stats
     const q24h = `
       WITH w AS (
         SELECT
@@ -120,18 +121,11 @@ export async function GET(
         volume: toNum(r.volume),
       }));
 
-    if (!latestBucket || latestClose === null) {
-      return NextResponse.json(
-        { ok: false, error: `No data found for symbol ${symbol}` },
-        { status: 404 }
-      );
-    }
-
     return NextResponse.json(
       {
         ok: true,
         symbol,
-        updatedAt: new Date().toISOString(), // ✅ fixes "Invalid Date"
+        updatedAt: new Date().toISOString(),
         stats: {
           latestBucket,
           latestClose,
@@ -141,7 +135,7 @@ export async function GET(
           low24h,
           volume24h,
         },
-        points,      // what your page debug uses
+        points,
         series: points,
         // backwards compatibility
         latest_bucket: latestBucket,
