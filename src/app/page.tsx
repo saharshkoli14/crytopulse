@@ -1,65 +1,154 @@
-import Image from "next/image";
+import Link from "next/link";
+import { getOverviewData } from "@/lib/getOverview";
 
-export default function Home() {
-  return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+function fmtNum(x: number | null | undefined) {
+  if (x === null || x === undefined) return "—";
+  return Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(x);
+}
+
+function fmtPct(x: number | null | undefined) {
+  if (x === null || x === undefined) return "—";
+  const v = x * 100;
+  const s = v >= 0 ? "+" : "";
+  return `${s}${v.toFixed(2)}%`;
+}
+
+export default async function HomePage() {
+  let data: Awaited<ReturnType<typeof getOverviewData>>;
+
+  try {
+    data = await getOverviewData();
+  } catch (err) {
+    console.error("HomePage error:", err);
+    return (
+      <main style={{ padding: 24, fontFamily: "system-ui" }}>
+        <h1>CryptoPulse</h1>
+        <p>Failed to load overview. Please try again later.</p>
+        <div style={{ marginTop: 14, display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <Link href="/prediction" className="btnPrimary">
+            🔮 Get a Prediction
+          </Link>
+          <Link href="/about" className="btn">
+            About
+          </Link>
         </div>
       </main>
-    </div>
+    );
+  }
+
+  const symbols = (data.symbols ?? []).filter(
+    (r) => String(r.symbol).trim().toUpperCase() !== "BTCUSDT"
+  );
+
+  return (
+    <main className="container" style={{ fontFamily: "system-ui" }}>
+      <header
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "baseline",
+          gap: 16,
+          flexWrap: "wrap",
+        }}
+      >
+        <div>
+          <h1 style={{ fontSize: 32, margin: 0 }}>CryptoPulse</h1>
+          <p style={{ marginTop: 6, opacity: 0.8 }}>
+            Overview of tracked crypto pairs • Updated:{" "}
+            {new Date(data.updated_at).toLocaleString()}
+          </p>
+
+          <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <Link
+              href="/prediction"
+              className="btn"
+              style={{
+                boxShadow:
+                  "0 0 0 1px rgba(99,102,241,0.35), 0 12px 30px rgba(99,102,241,0.12)",
+              }}
+            >
+              🔮 Get a Prediction
+            </Link>
+            <Link href="/overview" className="btn">
+              Overview
+            </Link>
+            <Link href="/about" className="btn">
+              About
+            </Link>
+          </div>
+        </div>
+      </header>
+
+      <section
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+          gap: 14,
+          marginTop: 18,
+        }}
+      >
+        {symbols.map((r) => (
+          <div key={r.symbol} className="glass" style={{ padding: 16 }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "baseline",
+                gap: 10,
+              }}
+            >
+              <h2 style={{ margin: 0, fontSize: 18 }}>{r.symbol}</h2>
+              <span style={{ opacity: 0.75, fontSize: 12 }}>
+                {new Date(r.latest_bucket).toLocaleString()}
+              </span>
+            </div>
+
+            <div style={{ marginTop: 12, fontSize: 34, fontWeight: 800 }}>
+              {fmtNum(r.latest_close)}
+            </div>
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr",
+                gap: 10,
+                marginTop: 12,
+                fontSize: 13,
+              }}
+            >
+              <div className="miniCard">
+                <div className="miniLabel">24h change</div>
+                <div className="miniValue">{fmtPct(r.pct_change_24h)}</div>
+              </div>
+              <div className="miniCard">
+                <div className="miniLabel">24h volume</div>
+                <div className="miniValue">{fmtNum(r.volume_24h)}</div>
+              </div>
+              <div className="miniCard">
+                <div className="miniLabel">24h stdev</div>
+                <div className="miniValue">{fmtNum(r.price_std_24h)}</div>
+              </div>
+              <div className="miniCard">
+                <div className="miniLabel">24h ago close</div>
+                <div className="miniValue">{fmtNum(r.close_24h_ago)}</div>
+              </div>
+            </div>
+
+            <div style={{ marginTop: 14 }}>
+              <Link
+                href={`/symbol/${encodeURIComponent(r.symbol)}`}
+                className="btn"
+                style={{ display: "inline-flex" }}
+              >
+                View details →
+              </Link>
+            </div>
+          </div>
+        ))}
+      </section>
+    </main>
   );
 }
