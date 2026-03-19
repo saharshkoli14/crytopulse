@@ -1,35 +1,60 @@
 import Link from "next/link";
-import { getOverviewData } from "@/lib/getOverview";
 
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
+type OverviewRow = {
+  symbol: string;
+  latest_bucket: string;
+  latest_close: number;
+  close_24h_ago: number | null;
+  pct_change_24h: number | null;
+  volume_24h: number | null;
+  price_std_24h: number | null;
+};
+
+type OverviewResponse = {
+  updated_at: string;
+  symbols: OverviewRow[];
+};
 
 function fmtNum(x: number | null | undefined) {
-  if (x === null || x === undefined) return "â€”";
+  if (x === null || x === undefined) return "—";
   return Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(x);
 }
 
 function fmtPct(x: number | null | undefined) {
-  if (x === null || x === undefined) return "â€”";
+  if (x === null || x === undefined) return "—";
   const v = x * 100;
   const s = v >= 0 ? "+" : "";
   return `${s}${v.toFixed(2)}%`;
 }
 
-export default async function HomePage() {
-  let data: Awaited<ReturnType<typeof getOverviewData>>;
+function getOrigin() {
+  // ✅ If you set NEXT_PUBLIC_BASE_URL on Vercel, it will use it
+  const envBase = process.env.NEXT_PUBLIC_BASE_URL;
+  if (envBase && envBase.trim()) return envBase.replace(/\/+$/, "");
 
-  try {
-    data = await getOverviewData();
-  } catch (err) {
-    console.error("HomePage error:", err);
+  // ✅ Vercel provides VERCEL_URL (no protocol)
+  if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`;
+
+  // ✅ Local dev
+  return "http://localhost:3000";
+}
+
+export default async function HomePage() {
+  const origin = getOrigin();
+
+  const res = await fetch(`${origin}/api/overview`, {
+    cache: "no-store",
+  });
+
+  if (!res.ok) {
     return (
       <main style={{ padding: 24, fontFamily: "system-ui" }}>
         <h1>CryptoPulse</h1>
-        <p>Failed to load overview. Please try again later.</p>
+        <p>Failed to load overview. Status: {res.status}</p>
+
         <div style={{ marginTop: 14, display: "flex", gap: 10, flexWrap: "wrap" }}>
           <Link href="/prediction" className="btnPrimary">
-            ðŸ”® Get a Prediction
+            🔮 Get a Prediction
           </Link>
           <Link href="/about" className="btn">
             About
@@ -38,6 +63,8 @@ export default async function HomePage() {
       </main>
     );
   }
+
+  const data: OverviewResponse = await res.json();
 
   const symbols = (data.symbols ?? []).filter(
     (r) => String(r.symbol).trim().toUpperCase() !== "BTCUSDT"
@@ -57,7 +84,7 @@ export default async function HomePage() {
         <div>
           <h1 style={{ fontSize: 32, margin: 0 }}>CryptoPulse</h1>
           <p style={{ marginTop: 6, opacity: 0.8 }}>
-            Overview of tracked crypto pairs â€¢ Updated:{" "}
+            Overview of tracked crypto pairs • Updated:{" "}
             {new Date(data.updated_at).toLocaleString()}
           </p>
 
@@ -70,7 +97,7 @@ export default async function HomePage() {
                   "0 0 0 1px rgba(99,102,241,0.35), 0 12px 30px rgba(99,102,241,0.12)",
               }}
             >
-              ðŸ”® Get a Prediction
+              🔮 Get a Prediction
             </Link>
             <Link href="/overview" className="btn">
               Overview
@@ -143,7 +170,7 @@ export default async function HomePage() {
                 className="btn"
                 style={{ display: "inline-flex" }}
               >
-                View details â†’
+                View details →
               </Link>
             </div>
           </div>
