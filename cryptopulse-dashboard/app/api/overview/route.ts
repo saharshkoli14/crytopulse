@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getOverviewData } from "../../../lib/getOverview";
+import { getOverviewData } from "../../../src/lib/getOverview";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
